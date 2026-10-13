@@ -1,0 +1,4 @@
+0.1 key T
+2 shot shots/rt_early.ppm
+12 shot shots/rt_done.ppm
+12.5 quit

@@ -1,0 +1,10 @@
+0.1 key TAB
+0.2 view -28 1.0 9.5 -28 0.5 0 36
+0.3 shot shots/d_side.ppm
+0.4 view -15.5 1.5 6.5 -19.2 0.5 2.5 38
+0.5 shot shots/d_blue.ppm
+0.6 view -41 1.6 -8.5 -37 0.5 -5 38
+0.7 shot shots/d_silver34.ppm
+0.8 view -52 2.2 2.5 -46 0.6 5 40
+0.9 shot shots/d_rear.ppm
+1.0 quit

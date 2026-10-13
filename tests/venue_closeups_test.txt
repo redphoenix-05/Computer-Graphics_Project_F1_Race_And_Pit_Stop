@@ -1,0 +1,9 @@
+0.1 view 20 6 25 20 18 56 48
+0.2 shot shots/obj_tower.ppm
+0.3 view 10 3 2 10 7 -26 50
+0.4 shot shots/obj_grandstand.ppm
+0.5 view -14 2 14 -14 3.2 26 50
+0.6 shot shots/obj_garage.ppm
+0.7 view 0 1.2 18 0 1.0 22.5 38
+0.8 shot shots/obj_crew.ppm
+0.9 quit

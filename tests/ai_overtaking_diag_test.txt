@@ -1,0 +1,6 @@
+0.1 skip
+60 diag
+120 diag
+240 diag
+300 diag
+301 quit

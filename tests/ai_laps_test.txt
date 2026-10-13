@@ -1,0 +1,7 @@
+7 print
+30 print
+60 print
+90 print
+120 print
+150 print
+151 quit

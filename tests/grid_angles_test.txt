@@ -1,0 +1,9 @@
+0.1 view -62 25 0 -20 0.5 0 52
+0.2 shot shots/start_grid_angle1.ppm
+0.3 view 8 24 0 -35 0.5 0 55
+0.4 shot shots/start_grid_angle2.ppm
+0.5 view -28 30 -22 -28 0.5 0 55
+0.6 shot shots/start_grid_angle3.ppm
+0.7 view -28 36 -6 -28 0 0 62
+0.8 shot shots/start_grid_angle4.ppm
+0.9 quit

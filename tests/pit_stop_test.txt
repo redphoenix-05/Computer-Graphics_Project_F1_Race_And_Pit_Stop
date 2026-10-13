@@ -1,0 +1,17 @@
+0.1 skip
+0.2 tele -400 30
+0.3 key U
+0.4 key 5
+28 print
+30 key R
+31.4 shot shots/p1_raising.ppm
+32.5 print
+33 key C
+36.5 shot shots/p2_tyres.ppm
+39 print
+40 key D
+42.5 print
+43 key Q
+44 shot shots/p3_exit.ppm
+60 print
+61 quit

@@ -1,0 +1,12 @@
+0.1 key R
+0.2 skip
+5 key P
+5.1 print
+45 print
+50 print
+55 print
+60 print
+65 print
+70 print
+80 print
+81 quit

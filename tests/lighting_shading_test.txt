@@ -1,0 +1,15 @@
+0.1 key TAB
+0.2 shot shots/light_day.ppm
+0.3 key L
+0.4 shot shots/light_dusk.ppm
+0.5 key L
+0.6 shot shots/light_night.ppm
+0.7 key L
+0.8 shot shots/sh_hybrid.ppm
+0.9 key G
+1.0 shot shots/sh_gouraud.ppm
+1.1 key H
+1.2 shot shots/sh_phong.ppm
+1.3 key W
+1.4 shot shots/sh_wire.ppm
+1.5 quit

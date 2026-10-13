@@ -1,0 +1,14 @@
+0.1 key M
+0.2 skip
+0.3 hold UP 30
+9 print
+11 print
+12 print
+13 print
+14 print
+16 print
+18 print
+18.5 hold LEFT 1
+20 print
+22 print
+23 quit

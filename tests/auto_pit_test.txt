@@ -1,0 +1,7 @@
+0.1 skip
+5 key Y
+60 print
+66 print
+75 print
+120 print
+121 quit
