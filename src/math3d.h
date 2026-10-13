@@ -56,4 +56,55 @@ inline float wrapAngle(float a) {
     return a;
 }
 
+struct mat4 {
+    float m[16];  // column-major: m[col*4 + row]
+    mat4() { std::memset(m, 0, sizeof(m)); m[0] = m[5] = m[10] = m[15] = 1.f; }
+    float& at(int r, int c) { return m[c * 4 + r]; }
+    float at(int r, int c) const { return m[c * 4 + r]; }
+
+    mat4 operator*(const mat4& b) const {
+        mat4 r;
+        for (int c = 0; c < 4; c++)
+            for (int rr = 0; rr < 4; rr++) {
+                float s = 0;
+                for (int k = 0; k < 4; k++) s += m[k * 4 + rr] * b.m[c * 4 + k];
+                r.m[c * 4 + rr] = s;
+            }
+        return r;
+    }
+    vec3 point(const vec3& p) const {  // transform a position (w = 1)
+        return {m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12],
+                m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
+                m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]};
+    }
+    vec3 dir(const vec3& p) const {  // transform a direction (w = 0)
+        return {m[0] * p.x + m[4] * p.y + m[8] * p.z,
+                m[1] * p.x + m[5] * p.y + m[9] * p.z,
+                m[2] * p.x + m[6] * p.y + m[10] * p.z};
+    }
+    vec3 translation() const { return {m[12], m[13], m[14]}; }
+};
+
+// ---- Geometric transformation matrices ------------------------------------
+inline mat4 translate(const vec3& t) {
+    mat4 r; r.m[12] = t.x; r.m[13] = t.y; r.m[14] = t.z; return r;
+}
+inline mat4 translate(float x, float y, float z) { return translate(vec3(x, y, z)); }
+inline mat4 scale(const vec3& s) {
+    mat4 r; r.m[0] = s.x; r.m[5] = s.y; r.m[10] = s.z; return r;
+}
+inline mat4 scale(float x, float y, float z) { return scale(vec3(x, y, z)); }
+inline mat4 scale(float s) { return scale(vec3(s, s, s)); }
+inline mat4 rotX(float a) {
+    mat4 r; float c = std::cos(a), s = std::sin(a);
+    r.at(1, 1) = c; r.at(1, 2) = -s; r.at(2, 1) = s; r.at(2, 2) = c; return r;
+}
+inline mat4 rotY(float a) {
+    mat4 r; float c = std::cos(a), s = std::sin(a);
+    r.at(0, 0) = c; r.at(0, 2) = s; r.at(2, 0) = -s; r.at(2, 2) = c; return r;
+}
+inline mat4 rotZ(float a) {
+    mat4 r; float c = std::cos(a), s = std::sin(a);
+    r.at(0, 0) = c; r.at(0, 1) = -s; r.at(1, 0) = s; r.at(1, 1) = c; return r;
+}
 
