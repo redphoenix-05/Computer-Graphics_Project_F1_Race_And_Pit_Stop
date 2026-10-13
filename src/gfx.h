@@ -21,6 +21,63 @@
 #include "font_data.h"
 
 // ---------------------------------------------------------------------------
+//  Shaders
+// ---------------------------------------------------------------------------
+static const char* GLSL_LIGHTING = R"GLSL(
+#define MAXL 16
+uniform vec3 uCamPos;
+uniform vec3 uSunDir;   // direction TOWARDS the sun
+uniform vec3 uSunCol;
+uniform vec3 uSkyAmb;
+uniform vec3 uGndAmb;
+uniform int  uNL;
+uniform vec3 uLPos[MAXL];
+uniform vec3 uLCol[MAXL];
+uniform vec3 uLDir[MAXL];
+uniform vec4 uLPar[MAXL];   // radius, cosInner, cosOuter, isSpot
+uniform vec3 uFogCol;
+uniform float uFogDen;
+
+// Blinn-Phong illumination: hemispheric ambient + directional sun +
+// up to 16 point / spot lights + emission.  Used per-vertex by the Gouraud
+// program and per-fragment by the Phong program.
+vec3 lightModel(vec3 P, vec3 N, vec3 col, float spec, float shin, float emis) {
+    col = col * col;                       // sRGB-ish -> linear
+    vec3 V = normalize(uCamPos - P);
+    vec3 res = mix(uGndAmb, uSkyAmb, N.y * 0.5 + 0.5) * col;
+    float ndl = max(dot(N, uSunDir), 0.0);
+    res += uSunCol * col * ndl;
+    if (ndl > 0.0 && spec > 0.0) {
+        vec3 H = normalize(uSunDir + V);
+        res += uSunCol * spec * pow(max(dot(N, H), 0.0), shin);
+    }
+    for (int i = 0; i < uNL; i++) {
+        vec3 L = uLPos[i] - P;
+        float d = length(L);
+        L /= max(d, 0.001);
+        float att = clamp(1.0 - d / uLPar[i].x, 0.0, 1.0);
+        att *= att;
+        if (uLPar[i].w > 0.5) {
+            float cd = dot(-L, uLDir[i]);
+            att *= smoothstep(uLPar[i].z, uLPar[i].y, cd);
+        }
+        float nl = max(dot(N, L), 0.0);
+        res += uLCol[i] * att * col * nl;
+        if (nl > 0.0 && spec > 0.0) {
+            vec3 H = normalize(L + V);
+            res += uLCol[i] * att * spec * pow(max(dot(N, H), 0.0), shin);
+        }
+    }
+    res += col * emis * 1.8;
+    return res;
+}
+vec3 finish(vec3 c, float dist) {
+    float f = 1.0 - exp(-dist * uFogDen);
+    c = mix(c, uFogCol * uFogCol, clamp(f, 0.0, 1.0));
+    c = vec3(1.0) - exp(-c * 1.25);       // soft tone mapping
+    return pow(c, vec3(1.0 / 2.2));       // gamma
+}
+)GLSL";
 //  Vertex format and procedural mesh builder
 // ---------------------------------------------------------------------------
 struct Vertex { float p[3], n[3], c[3], m[4]; };   // 13 floats
@@ -269,4 +326,28 @@ struct MeshBuilder {
     }
 };
 
+// ---------------------------------------------------------------------------
+//  GPU mesh
+// ---------------------------------------------------------------------------
+struct Mesh {
+    GLuint vao = 0, vbo = 0; GLsizei count = 0;
+    vec3 bmin{1e9f, 1e9f, 1e9f}, bmax{-1e9f, -1e9f, -1e9f};
+    void upload(const MeshBuilder& mb) {
+        count = (GLsizei)mb.v.size();
+        for (auto& x : mb.v) {
+            bmin.x = std::min(bmin.x, x.p[0]); bmin.y = std::min(bmin.y, x.p[1]); bmin.z = std::min(bmin.z, x.p[2]);
+            bmax.x = std::max(bmax.x, x.p[0]); bmax.y = std::max(bmax.y, x.p[1]); bmax.z = std::max(bmax.z, x.p[2]);
+        }
+        if (!vao) { glGenVertexArrays(1, &vao); glGenBuffers(1, &vbo); }
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, mb.v.size() * sizeof(Vertex), mb.v.data(), GL_STATIC_DRAW);
+        GLsizei st = sizeof(Vertex);
+        glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, st, (void*)0);
+        glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, st, (void*)(3 * 4));
+        glEnableVertexAttribArray(2); glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, st, (void*)(6 * 4));
+        glEnableVertexAttribArray(3); glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, st, (void*)(9 * 4));
+        glBindVertexArray(0);
+    }
+    void draw() const { if (count) { glBindVertexArray(vao); glDrawArrays(GL_TRIANGLES, 0, count); } }
 };
