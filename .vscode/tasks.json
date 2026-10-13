@@ -1,0 +1,34 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "Build OpenGL Project",
+            "command": "g++",
+            "args": [
+                "-std=c++17",
+                "-O2",
+                "src/main.cpp",
+                "src/glad.c",
+                "-Iinclude",
+                "-Llib",
+                "-lglfw3dll",
+                "-lopengl32",
+                "-lgdi32",
+                "-o",
+                "main.exe"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Compile OpenGL project with g++"
+        }
+    ]
+}
