@@ -303,6 +303,7 @@ struct Shader {
     void m4(const char* n, const mat4& m) { glUniformMatrix4fv(u(n), 1, GL_FALSE, m.m); }
 };
 
+// ---------------------------------------------------------------------------
 //  Vertex format and procedural mesh builder
 // ---------------------------------------------------------------------------
 struct Vertex { float p[3], n[3], c[3], m[4]; };   // 13 floats
@@ -641,6 +642,66 @@ struct DecalBuilder {
         }
     }
 };
+
+struct Frustum {
+    float pl[6][4];
+    void set(const mat4& M) {
+        auto row = [&](int i, float* r) { r[0] = M.m[i]; r[1] = M.m[4 + i]; r[2] = M.m[8 + i]; r[3] = M.m[12 + i]; };
+        float r0[4], r1[4], r2[4], r3[4]; row(0, r0); row(1, r1); row(2, r2); row(3, r3);
+        for (int i = 0; i < 4; i++) {
+            pl[0][i] = r3[i] + r0[i]; pl[1][i] = r3[i] - r0[i];
+            pl[2][i] = r3[i] + r1[i]; pl[3][i] = r3[i] - r1[i];
+            pl[4][i] = r3[i] + r2[i]; pl[5][i] = r3[i] - r2[i];
+        }
+    }
+    bool visible(const vec3& mn, const vec3& mx) const {
+        for (int i = 0; i < 6; i++) {
+            const float* p = pl[i];
+            vec3 q(p[0] > 0 ? mx.x : mn.x, p[1] > 0 ? mx.y : mn.y, p[2] > 0 ? mx.z : mn.z);
+            if (p[0] * q.x + p[1] * q.y + p[2] * q.z + p[3] < 0) return false;
+        }
+        return true;
+    }
+};
+
+// Spatially chunked static geometry: each grid cell becomes one VBO that is
+// frustum- and distance-culled every frame.
+struct StaticBatch {
+    float cell = 220.f;
+    std::map<long long, MeshBuilder> cells;
+    std::vector<Mesh> chunks;
+    size_t tris = 0;
+    MeshBuilder& at(float x, float z) {
+        long long ix = (long long)std::floor(x / cell), iz = (long long)std::floor(z / cell);
+        return cells[(ix + 100000) * 200000LL + (iz + 100000)];
+    }
+    MeshBuilder& at(const vec3& p) { return at(p.x, p.z); }
+    void finalize() {
+        chunks.clear();
+        for (auto& kv : cells) {
+            if (kv.second.v.empty()) continue;
+            chunks.emplace_back();
+            chunks.back().upload(kv.second);
+            tris += kv.second.v.size() / 3;
+        }
+        cells.clear();
+    }
+};
+
+// ---------------------------------------------------------------------------
+//  Lighting presets / light sources
+// ---------------------------------------------------------------------------
+struct LightSrc { vec3 pos, col, dir; float radius = 30, cosIn = 0.9f, cosOut = 0.8f; bool spot = false; };
+
+struct Preset {
+    const char* name;
+    vec3 sunDir, sunCol, skyAmb, gndAmb, zenith, horizon, fog;
+    float fogDen, lamp, stars;
+    vec3 cloud;
+};
+
+enum ShadeMode { SH_HYBRID = 0, SH_GOURAUD = 1, SH_PHONG = 2 };
+
 static GLuint makeNoiseTexture() {
     const int S = 256;
     std::vector<unsigned char> d(S * S);
@@ -672,6 +733,133 @@ static GLuint makeNoiseTexture() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     return t;
 }
+
+// ---------------------------------------------------------------------------
+//  Renderer
+// ---------------------------------------------------------------------------
+struct Renderer {
+    Shader gouraud, phong, sky, shadow, blit, decal;
+    GLuint fontTex = 0;
+    GLuint noiseTex = 0, emptyVao = 0;
+    Mesh shadowQuad;
+    ShadeMode mode = SH_HYBRID;
+    bool wire = false;
+    Shader* cur = nullptr;
+    mat4 VP; vec3 camPos; Frustum fr;
+    std::vector<LightSrc> lights;
+    const Preset* pre = nullptr;
+    float time = 0;
+    int drawCalls = 0;
+
+    void init() {
+        std::string vsA = std::string("#version 330 core\n") + GLSL_LIGHTING + GLSL_ATTRIBS;
+        std::string fsA = std::string("#version 330 core\n") + GLSL_LIGHTING + GLSL_DETAIL;
+        std::string vsD = std::string("#version 330 core\n") + GLSL_LIGHTING + DECAL_VS_BODY;
+        std::string fsD = std::string("#version 330 core\n") + GLSL_LIGHTING + DECAL_FS_BODY;
+        gouraud.build(vsA + GOURAUD_VS_BODY, fsA + GOURAUD_FS_BODY, "gouraud");
+        phong.build(vsA + PHONG_VS_BODY, fsA + PHONG_FS_BODY, "phong");
+        decal.build(vsD, fsD, "decal");
+        sky.build(SKY_VS, SKY_FS, "sky");
+        shadow.build(SHADOW_VS, SHADOW_FS, "shadow");
+        blit.build(BLIT_VS, BLIT_FS, "blit");
+        noiseTex = makeNoiseTexture();
+        glGenVertexArrays(1, &emptyVao);
+        MeshBuilder q;
+        q.quadUp({-1, 0, -1}, {-1, 0, 1}, {1, 0, 1}, {1, 0, -1}, MT(vec3(0)));
+        shadowQuad.upload(q);
+        for (Shader* s : {&gouraud, &phong}) { s->use(); s->i1("uNoise", 0); }
+        decal.use(); decal.i1("uFont", 1);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, noiseTex);
+    }
+
+    void beginFrame(const mat4& view, const mat4& proj, const vec3& cam, const Preset& p, float t) {
+        VP = proj * view; camPos = cam; pre = &p; time = t; drawCalls = 0;
+        fr.set(VP);
+        for (Shader* s : {&gouraud, &phong, &decal}) {
+            s->use();
+            s->m4("uVP", VP); s->f3("uCamPos", cam);
+            s->f3("uSunDir", normalize(p.sunDir)); s->f3("uSunCol", p.sunCol);
+            s->f3("uSkyAmb", p.skyAmb); s->f3("uGndAmb", p.gndAmb);
+            s->f3("uFogCol", p.fog); s->f1("uFogDen", p.fogDen);
+            if (s != &decal) s->f1("uAlpha", 1.f);
+        }
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, noiseTex);
+        cur = nullptr;
+    }
+    void uploadLights() {
+        int n = std::min((int)lights.size(), 16);
+        float pos[48], col[48], dir[48], par[64];
+        for (int i = 0; i < n; i++) {
+            const LightSrc& L = lights[i];
+            pos[i * 3] = L.pos.x; pos[i * 3 + 1] = L.pos.y; pos[i * 3 + 2] = L.pos.z;
+            col[i * 3] = L.col.x; col[i * 3 + 1] = L.col.y; col[i * 3 + 2] = L.col.z;
+            dir[i * 3] = L.dir.x; dir[i * 3 + 1] = L.dir.y; dir[i * 3 + 2] = L.dir.z;
+            par[i * 4] = L.radius; par[i * 4 + 1] = L.cosIn; par[i * 4 + 2] = L.cosOut; par[i * 4 + 3] = L.spot ? 1.f : 0.f;
+        }
+        for (Shader* s : {&gouraud, &phong, &decal}) {
+            s->use(); s->i1("uNL", n);
+            if (n) {
+                glUniform3fv(s->u("uLPos"), n, pos); glUniform3fv(s->u("uLCol"), n, col);
+                glUniform3fv(s->u("uLDir"), n, dir); glUniform4fv(s->u("uLPar"), n, par);
+            }
+        }
+        cur = nullptr;
+    }
+    Shader* pick(bool hero) {
+        if (mode == SH_GOURAUD) return &gouraud;
+        if (mode == SH_PHONG) return &phong;
+        return hero ? &phong : &gouraud;
+    }
+    void draw(const Mesh& m, const mat4& model, const vec3& tint = vec3(1, 1, 1), float emis = 0.f,
+              bool hero = true, float alpha = 1.f) {
+        Shader* s = pick(hero);
+        if (s != cur) { s->use(); cur = s; }
+        s->m4("uModel", model);
+        float nm[9]; normalMatrix(model, nm);
+        glUniformMatrix3fv(s->u("uNrmMat"), 1, GL_FALSE, nm);
+        s->f3("uTint", tint); s->f1("uEmis", emis); s->f1("uAlpha", alpha);
+        m.draw(); drawCalls++;
+    }
+    void drawDecal(const DecalMesh& m, const mat4& model) {
+        decal.use();
+        decal.m4("uModel", model);
+        float nm[9]; normalMatrix(model, nm);
+        glUniformMatrix3fv(decal.u("uNrmMat"), 1, GL_FALSE, nm);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, fontTex); glActiveTexture(GL_TEXTURE0);
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE); glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(-2.f, -6.f);
+        m.draw(); drawCalls++;
+        glDisable(GL_POLYGON_OFFSET_FILL); glDepthMask(GL_TRUE); glDisable(GL_BLEND);
+        cur = nullptr;
+    }
+    void drawBatch(const StaticBatch& b, bool hero, float maxDist, float alpha = 1.f) {
+        mat4 I;
+        for (auto& c : b.chunks) {
+            if (!fr.visible(c.bmin, c.bmax)) continue;
+            vec3 cp(clampf(camPos.x, c.bmin.x, c.bmax.x), clampf(camPos.y, c.bmin.y, c.bmax.y), clampf(camPos.z, c.bmin.z, c.bmax.z));
+            if (length(cp - camPos) > maxDist) continue;
+            draw(c, I, vec3(1, 1, 1), 0.f, hero, alpha);
+        }
+    }
+    void drawSky(const mat4& view, const mat4& proj) {
+        glDisable(GL_DEPTH_TEST); glDepthMask(GL_FALSE);
+        sky.use();
+        sky.m4("uInvVP", inverse(proj * view));
+        sky.f3("uCamPos", camPos);
+        sky.f3("uSunDir", normalize(pre->sunDir)); sky.f3("uSunCol", pre->sunCol);
+        sky.f3("uZenith", pre->zenith); sky.f3("uHorizon", pre->horizon); sky.f3("uFogCol", pre->fog * pre->fog);
+        sky.f1("uStars", pre->stars); sky.f1("uTime", time); sky.f3("uCloud", pre->cloud);
+        glBindVertexArray(emptyVao); glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDepthMask(GL_TRUE); glEnable(GL_DEPTH_TEST);
+        cur = nullptr;
+    }
+    void drawBlob(const vec3& pos, float yaw, float sx, float sz, float alpha) {
+        shadow.use(); shadow.m4("uVP", VP);
+        mat4 M = translate(pos) * rotY(-yaw) * scale(sx, 1, sz);
+        shadow.m4("uModel", M); shadow.f1("uAlpha", alpha);
+        shadowQuad.draw(); cur = nullptr;
+    }
+};
 
 // ---------------------------------------------------------------------------
 //  HUD / 2D overlay
