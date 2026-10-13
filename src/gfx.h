@@ -232,6 +232,34 @@ in vec2 vL; uniform float uAlpha; out vec4 FragColor;
 void main() { float a = (1.0 - smoothstep(0.25, 1.0, length(vL))) * uAlpha; FragColor = vec4(0.0, 0.0, 0.0, a); }
 )GLSL";
 
+static const char* HUD_VS = R"GLSL(
+#version 330 core
+layout(location=0) in vec2 aPos; layout(location=1) in vec2 aUV; layout(location=2) in vec4 aCol;
+uniform vec2 uScreen; out vec2 vUV; out vec4 vCol;
+void main() { vUV = aUV; vCol = aCol; gl_Position = vec4(aPos.x / uScreen.x * 2.0 - 1.0, 1.0 - aPos.y / uScreen.y * 2.0, 0.0, 1.0); }
+)GLSL";
+static const char* HUD_FS = R"GLSL(
+#version 330 core
+in vec2 vUV; in vec4 vCol; uniform sampler2D uTex; out vec4 FragColor;
+void main() { FragColor = vec4(vCol.rgb, vCol.a * texture(uTex, vUV).r); }
+)GLSL";
+
+static const char* BLIT_VS = R"GLSL(
+#version 330 core
+out vec2 vUV; uniform vec4 uRect; // x0,y0,x1,y1 in NDC
+void main() {
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);   // 0..2
+    vec2 q = vec2(gl_VertexID == 1 || gl_VertexID == 3 ? 1.0 : 0.0, gl_VertexID >= 2 ? 1.0 : 0.0);
+    vUV = vec2(q.x, 1.0 - q.y);
+    gl_Position = vec4(mix(uRect.xy, uRect.zw, q), 0.0, 1.0);
+}
+)GLSL";
+static const char* BLIT_FS = R"GLSL(
+#version 330 core
+in vec2 vUV; uniform sampler2D uTex; out vec4 FragColor;
+void main() { FragColor = vec4(texture(uTex, vUV).rgb, 1.0); }
+)GLSL";
+
 // ---------------------------------------------------------------------------
 //  Shader program wrapper
 // ---------------------------------------------------------------------------
@@ -645,3 +673,82 @@ static GLuint makeNoiseTexture() {
     return t;
 }
 
+// ---------------------------------------------------------------------------
+//  HUD / 2D overlay
+// ---------------------------------------------------------------------------
+struct Hud {
+    Shader sh; GLuint vao = 0, vbo = 0, tex = 0;
+    std::vector<float> buf; int W = 1, H = 1;
+    void init() {
+        sh.build(HUD_VS, HUD_FS, "hud");
+        glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, FONT_W, FONT_H, 0, GL_RED, GL_UNSIGNED_BYTE, FONT_DATA);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenVertexArrays(1, &vao); glGenBuffers(1, &vbo);
+        glBindVertexArray(vao); glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glEnableVertexAttribArray(0); glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 32, (void*)0);
+        glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 32, (void*)8);
+        glEnableVertexAttribArray(2); glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, 32, (void*)16);
+    }
+    void begin(int w, int h) { W = w; H = h; buf.clear(); }
+    void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const float* c) {
+        float q[6][4] = {{x0, y0, u0, v0}, {x1, y0, u1, v0}, {x1, y1, u1, v1}, {x0, y0, u0, v0}, {x1, y1, u1, v1}, {x0, y1, u0, v1}};
+        for (auto& p : q) { buf.insert(buf.end(), {p[0], p[1], p[2], p[3], c[0], c[1], c[2], c[3]}); }
+    }
+    void rect(float x, float y, float w, float h, float r, float g, float b, float a = 1.f) {
+        float c[4] = {r, g, b, a};
+        float u = 16.f / FONT_W, v = 304.f / FONT_H;
+        quad(x, y, x + w, y + h, u, v, u, v, c);
+    }
+    void rectc(float x, float y, float w, float h, const vec3& c, float a = 1.f) { rect(x, y, w, h, c.x, c.y, c.z, a); }
+    // thick line = rotated quad
+    void line(float x0, float y0, float x1, float y1, float th, float r, float g, float b, float a = 1.f) {
+        float dx = x1 - x0, dy = y1 - y0, l = std::sqrt(dx * dx + dy * dy); if (l < 1e-4f) return;
+        float nx = -dy / l * th * 0.5f, ny = dx / l * th * 0.5f;
+        float c[4] = {r, g, b, a}; float u = 16.f / FONT_W, v = 304.f / FONT_H;
+        float q[6][2] = {{x0 + nx, y0 + ny}, {x1 + nx, y1 + ny}, {x1 - nx, y1 - ny}, {x0 + nx, y0 + ny}, {x1 - nx, y1 - ny}, {x0 - nx, y0 - ny}};
+        for (auto& p : q) buf.insert(buf.end(), {p[0], p[1], u, v, c[0], c[1], c[2], c[3]});
+    }
+    // Glyph cell is snapped to whole pixels so text stays crisp at any UI scale.
+    static int cellW(float sc) { return std::max(5, (int)std::lround(10.f * sc)); }
+    static int cellH(float sc) { return std::max(8, (int)std::lround(20.f * sc)); }
+    float textW(const std::string& s, float sc) const { return (float)(s.size() * cellW(sc)); }
+    void text(float x, float y, float sc, const vec3& col, const std::string& s, float a = 1.f) {
+        float c[4] = {col.x, col.y, col.z, a};
+        int cw = cellW(sc), ch = cellH(sc);
+        float x0 = std::floor(x + 0.5f), y0 = std::floor(y + 0.5f);
+        for (size_t i = 0; i < s.size(); i++) {
+            int chr = (unsigned char)s[i]; if (chr < 32 || chr > 126) chr = '?';
+            int idx = chr - 32, cx = idx % FONT_COLS, cy = idx / FONT_COLS;
+            float u0 = (float)(cx * FONT_CW) / FONT_W, v0 = (float)(cy * FONT_CH) / FONT_H;
+            float u1 = (float)(cx * FONT_CW + FONT_CW) / FONT_W, v1 = (float)(cy * FONT_CH + FONT_CH) / FONT_H;
+            quad(x0 + (float)(i * cw), y0, x0 + (float)((i + 1) * cw), y0 + ch, u0, v0, u1, v1, c);
+        }
+    }
+    void textShadow(float x, float y, float sc, const vec3& col, const std::string& s, float a = 1.f) {
+        { float o = std::max(1.f, std::floor(sc * 1.0f + 0.5f)); text(x + o, y + o, sc, vec3(0, 0, 0), s, a * 0.75f); }
+        text(x, y, sc, col, s, a);
+    }
+    void textC(float cx, float y, float sc, const vec3& col, const std::string& s, float a = 1.f) {
+        textShadow(cx - textW(s, sc) * 0.5f, y, sc, col, s, a);
+    }
+    void flush() {
+        if (buf.empty()) return;
+        glDisable(GL_DEPTH_TEST); glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        GLint pm[2]; glGetIntegerv(GL_POLYGON_MODE, pm);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        sh.use(); sh.f2("uScreen", (float)W, (float)H);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex);
+        glBindVertexArray(vao); glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, buf.size() * 4, buf.data(), GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(buf.size() / 8));
+        glPolygonMode(GL_FRONT_AND_BACK, (GLenum)pm[0]);
+        glDisable(GL_BLEND); glEnable(GL_DEPTH_TEST);
+    }
+};
