@@ -445,7 +445,7 @@ struct Game {
         char buf[160];
         snprintf(buf, sizeof buf, "%3d", (int)std::fabs(p.speed * 3.6f));
         hud.textShadow(cx - 160 * ui, by + 4 * ui, 4.2f * ui, white, buf);
-        hud.textShadow(cx - 160 * ui + 3 * 42 * ui + 4 * ui, by + 56 * ui, 1.2f * ui, grey, "KM/H");
+        hud.textShadow(cx - 160 * ui + hud.textW(buf, 4.2f * ui) + 6 * ui, by + 56 * ui, 1.2f * ui, grey, "KM/H");
         int gear = p.speed < -0.5f ? -1 : std::min(8, 1 + (int)(std::fabs(p.speed) / 11.5f));
         float span = 11.5f, rpm = clampf((std::fmod(std::fabs(p.speed), span) / span) * 0.5f + 0.5f + p.thr * 0.05f, 0.f, 1.f);
         if (std::fabs(p.speed) < 0.5f) rpm = 0.25f + p.thr * 0.5f;

@@ -903,8 +903,8 @@ struct Hud {
         for (auto& p : q) buf.insert(buf.end(), {p[0], p[1], u, v, c[0], c[1], c[2], c[3]});
     }
     // Glyph cell is snapped to whole pixels so text stays crisp at any UI scale.
-    static int cellW(float sc) { return std::max(5, (int)std::lround(10.f * sc)); }
-    static int cellH(float sc) { return std::max(8, (int)std::lround(20.f * sc)); }
+    static int cellW(float sc) { return std::max(4, (int)std::lround(8.0f * sc)); }
+    static int cellH(float sc) { return std::max(7, (int)std::lround(16.0f * sc)); }
     float textW(const std::string& s, float sc) const { return (float)(s.size() * cellW(sc)); }
     void text(float x, float y, float sc, const vec3& col, const std::string& s, float a = 1.f) {
         float c[4] = {col.x, col.y, col.z, a};
