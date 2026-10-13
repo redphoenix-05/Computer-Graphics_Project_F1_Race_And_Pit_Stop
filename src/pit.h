@@ -36,44 +36,51 @@ struct Crew {
     std::vector<Key> keys;
     const char* role = "";
 
-
-struct Crew {};
-    // ----------------------------------------------------------------------------
-    //  Per-frame update for the player's car while it is in the pit procedure.
-    //  Returns true while the pit system has control of the car.
-    // ----------------------------------------------------------------------------
-    bool guidedControl(Car& c, const Track& /*tr*/, float /*dt*/, float& thr, float& brk, float& steerT) {
-        // advance along path
-        int bi = pi; float bd = 1e18f;
-        for (int j = pi; j < (int)path.size() && j < pi + 40; j++) {
-            float dx = path[j].x - c.pos.x, dz = path[j].z - c.pos.z, dd = dx * dx + dz * dz;
-            if (dd < bd) { bd = dd; bi = j; }
-        }
-        pi = bi;
-        float Ld = clampf(6.f + 0.45f * std::fabs(c.speed), 7.f, 30.f);
-        int j = pi; float acc = 0;
-        while (j + 1 < (int)path.size() && acc < Ld) { acc += length(path[j + 1] - path[j]); j++; }
-        vec3 tg = path[j];
-        if (stage == PS_LANE && j + 1 >= (int)path.size()) tg = path.back();
-        vec3 to = tg - c.pos;
-        float alpha = wrapAngle(std::atan2(to.z, to.x) - c.heading);
-        steerT = std::atan2(2.f * Car::WB * std::sin(alpha), Ld);
-        float vt = PitC::LIMIT;
-        if (stage == PS_ENTRY || stage == PS_LANE) {
-            float rem = bx - c.pos.x;
-            // braking curve: the pit-lane limiter applies from the pit-entry line (end of the entry ramp)
-            float toLine = std::max(0.f, (PitC::ENTRY_X1 - 5.f) - c.pos.x);
-            vt = std::sqrt(PitC::LIMIT * PitC::LIMIT + 2.f * 30.f * toLine);
-            vt = std::min(vt, std::sqrt(2.f * 9.f * std::max(0.f, rem - 0.25f)) + 0.6f);
-        } else if (stage == PS_EXITING) {
-            float ux = c.pos.x;
-            vt = (ux < PitC::EXIT_X0 + 10.f) ? PitC::LIMIT : 90.f;
-            vt = std::min(vt, 3.f + tReal * 14.f);          // gentle launch
-        }
-        float err = vt - c.speed;
-        thr = clampf(err * 0.5f, 0.f, 1.f);
-        brk = err < -0.5f ? clampf((-err - 0.5f) * 0.35f, 0.f, 1.f) : 0.f;
-        return true;
+    void build(NodePool& P, const Prims& pr, const vec3& suit, const vec3& stripe, const vec3& helm, bool withGun) {
+        root = P.make(); pelvis = P.make(root);
+        auto part = [&](Node* parent, const Mesh* m, const mat4& l, const vec3& tint) {
+            Node* n = P.make(parent, m); n->local = l; n->tint = tint; return n;
+        };
+        part(pelvis, &pr.cube, translate(0, 0.30f, 0) * scale(0.26f, 0.56f, 0.44f), suit);
+        part(pelvis, &pr.cube, translate(0.132f, 0.36f, 0) * scale(0.012f, 0.10f, 0.40f), stripe);
+        part(pelvis, &pr.cube, translate(0.0f, 0.02f, 0) * scale(0.27f, 0.10f, 0.40f), stripe * 0.6f);
+        part(pelvis, &pr.sphereGloss, translate(0, 0.74f, 0) * scale(0.145f, 0.155f, 0.145f), helm);
+        part(pelvis, &pr.cubeGloss, translate(0.12f, 0.745f, 0) * scale(0.07f, 0.05f, 0.15f), vec3(0.03f, 0.03f, 0.05f));
+        part(pelvis, &pr.cyl, translate(0, 0.60f, 0) * scale(0.06f, 0.08f, 0.06f), vec3(0.8f, 0.6f, 0.5f));
+        auto arm = [&](float z, Node*& sh, Node*& el) {
+            sh = P.make(pelvis); sh->local = translate(0, 0.50f, z);
+            part(sh, &pr.cyl, translate(0, -0.15f, 0) * scale(0.052f, 0.30f, 0.052f), suit);
+            el = P.make(sh); el->local = translate(0, -0.30f, 0);
+            part(el, &pr.cyl, translate(0, -0.14f, 0) * scale(0.045f, 0.28f, 0.045f), suit);
+            part(el, &pr.sphere, translate(0, -0.30f, 0) * scale(0.052f), vec3(0.08f, 0.08f, 0.09f));
+        };
+        arm(-0.25f, lSh, lEl); arm(0.25f, rSh, rEl);
+        hand = P.make(rEl); hand->local = translate(0, -0.30f, 0);
+        gun = P.make(hand);
+        gun->visible = withGun;
+        part(gun, &pr.cube, translate(0, -0.20f, 0) * scale(0.07f, 0.34f, 0.07f), vec3(0.20f, 0.22f, 0.25f));
+        part(gun, &pr.cyl, translate(0, -0.40f, 0) * scale(0.055f, 0.06f, 0.055f), vec3(0.85f, 0.85f, 0.2f));
+        part(gun, &pr.cube, translate(0.0f, -0.05f, 0.0f) * scale(0.06f, 0.15f, 0.12f), vec3(0.9f, 0.25f, 0.1f));
+        auto leg = [&](float z, Node*& hip, Node*& kn) {
+            hip = P.make(pelvis); hip->local = translate(0, 0.0f, z);
+            part(hip, &pr.cyl, translate(0, -0.215f, 0) * scale(0.075f, 0.43f, 0.075f), suit * 0.8f);
+            kn = P.make(hip); kn->local = translate(0, -0.43f, 0);
+            part(kn, &pr.cyl, translate(0, -0.215f, 0) * scale(0.06f, 0.43f, 0.06f), suit * 0.8f);
+            part(kn, &pr.cube, translate(0.05f, -0.45f, 0) * scale(0.24f, 0.08f, 0.11f), vec3(0.05f, 0.05f, 0.06f));
+        };
+        leg(-0.10f, lHip, lKn); leg(0.10f, rHip, rKn);
     }
+    void setPose(const Pose& p) {
+        pelvis->local = translate(0, 0.88f - p.crouch, 0) * rotZ(-p.lean);
+        lSh->local = translate(0, 0.50f, -0.25f) * rotX(p.lAbd) * rotZ(p.lSh);
+        rSh->local = translate(0, 0.50f, 0.25f) * rotX(-p.rAbd) * rotZ(p.rSh);
+        lEl->local = translate(0, -0.30f, 0) * rotZ(p.lEl);
+        rEl->local = translate(0, -0.30f, 0) * rotZ(p.rEl);
+        lHip->local = translate(0, 0, -0.10f) * rotZ(p.lHip);
+        rHip->local = translate(0, 0, 0.10f) * rotZ(p.rHip);
+        lKn->local = translate(0, -0.43f, 0) * rotZ(-p.lKn);
+        rKn->local = translate(0, -0.43f, 0) * rotZ(-p.rKn);
+    }
+    // follow key-framed path; t = time since keys were set
 
 };
