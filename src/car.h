@@ -547,5 +547,15 @@ inline void driverControl(const Track& tr, Car& c, const std::vector<Car>& cars,
     float alpha = wrapAngle(std::atan2(to.z, to.x) - c.heading);
     steerTarget = std::atan2(2.f * Car::WB * std::sin(alpha), Ld);
 
-
+    // speed: profile of the centre line, adjusted for the radius of the chosen lane
+    float look = 4.f + c.speed * 0.15f, sl = c.s + look;
+    float fac = std::sqrt(clampf(1.f - c.lineCur * tr.curvature(sl), 0.6f, 1.4f));
+    float pace = c.skill * (1.f + 0.035f * std::sin(time * 0.13f + c.phase));
+    float vt = tr.sample(c.prof, sl) * fac * pace;
+    if (lead && leadGap < 38.f) vt *= 1.035f;                    // slipstream
+    if (lead && leadGap < 11.f && std::fabs(lead->d - c.d) < 2.3f) vt = std::min(vt, std::max(8.f, lead->speed + (leadGap - 4.f) * 0.5f));
+    float err = vt - c.speed;
+    thr = clampf(err * 0.45f, 0.f, 1.f);
+    brk = err < -1.0f ? clampf((-err - 1.f) * 0.30f, 0.f, 1.f) : 0.f;
+    if (c.speed < vt * 0.3f) brk = 0;
 }
