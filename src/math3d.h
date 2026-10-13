@@ -107,4 +107,42 @@ inline mat4 rotZ(float a) {
     mat4 r; float c = std::cos(a), s = std::sin(a);
     r.at(0, 0) = c; r.at(0, 1) = -s; r.at(1, 0) = s; r.at(1, 1) = c; return r;
 }
+// Matrix whose columns are the given basis vectors + origin
+inline mat4 basis(const vec3& x, const vec3& y, const vec3& z, const vec3& o) {
+    mat4 r;
+    r.m[0] = x.x; r.m[1] = x.y; r.m[2] = x.z;
+    r.m[4] = y.x; r.m[5] = y.y; r.m[6] = y.z;
+    r.m[8] = z.x; r.m[9] = z.y; r.m[10] = z.z;
+    r.m[12] = o.x; r.m[13] = o.y; r.m[14] = o.z;
+    return r;
+}
+// Frame whose local +Y axis points along 'dir', origin at 'o'
+inline mat4 frameY(const vec3& o, const vec3& dir) {
+    vec3 y = normalize(dir);
+    vec3 helper = std::fabs(y.y) < 0.95f ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 x = normalize(cross(helper, y));
+    vec3 z = cross(x, y);
+    // x,y,z must be right handed: x × y = z  ->  recompute
+    z = cross(x, y);
+    return basis(x, y, z, o);
+}
+inline mat4 perspective(float fovyRad, float aspect, float zn, float zf) {
+    mat4 r; std::memset(r.m, 0, sizeof(r.m));
+    float f = 1.f / std::tan(fovyRad * 0.5f);
+    r.m[0] = f / aspect; r.m[5] = f;
+    r.m[10] = (zf + zn) / (zn - zf); r.m[11] = -1.f;
+    r.m[14] = 2.f * zf * zn / (zn - zf);
+    return r;
+}
+inline mat4 lookAt(const vec3& eye, const vec3& at, const vec3& up) {
+    vec3 f = normalize(at - eye);
+    vec3 s = normalize(cross(f, up));
+    vec3 u = cross(s, f);
+    mat4 r;
+    r.at(0, 0) = s.x; r.at(0, 1) = s.y; r.at(0, 2) = s.z;
+    r.at(1, 0) = u.x; r.at(1, 1) = u.y; r.at(1, 2) = u.z;
+    r.at(2, 0) = -f.x; r.at(2, 1) = -f.y; r.at(2, 2) = -f.z;
+    r.at(0, 3) = -dot(s, eye); r.at(1, 3) = -dot(u, eye); r.at(2, 3) = dot(f, eye);
+    return r;
+}
 
