@@ -80,6 +80,20 @@ struct Track {
                 dense.push_back(r);
             }
         }
+        // arc length parameterisation
+        std::vector<float> cum(dense.size() + 1, 0.f);
+        for (size_t i = 0; i < dense.size(); i++)
+            cum[i + 1] = cum[i] + length(dense[(i + 1) % dense.size()] - dense[i]);
+        float total = cum.back();
+        N = (int)(total / 2.f); L = total; ds = L / N;
+        std::vector<vec3> raw(N);
+        size_t j = 0;
+        for (int i = 0; i < N; i++) {
+            float s = ds * i;
+            while (j + 1 < cum.size() - 1 && cum[j + 1] < s) j++;
+            float f = (s - cum[j]) / std::max(cum[j + 1] - cum[j], 1e-6f);
+            raw[i] = mix(dense[j], dense[(j + 1) % dense.size()], f);
+        }
 
     }
 };
