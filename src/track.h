@@ -94,6 +94,33 @@ struct Track {
             float f = (s - cum[j]) / std::max(cum[j + 1] - cum[j], 1e-6f);
             raw[i] = mix(dense[j], dense[(j + 1) % dense.size()], f);
         }
+        // rotate so that sample 0 is the start line (x = 0 on the main straight)
+        int best = 0; float bd = 1e9f;
+        for (int i = 0; i < N; i++) {
+            vec3 tt = raw[(i + 1) % N] - raw[(i + N - 1) % N];
+            if (tt.x > 0 && std::fabs(raw[i].z) < 5.f && std::fabs(raw[i].x) < bd) { bd = std::fabs(raw[i].x); best = i; }
+        }
+        p.resize(N);
+        for (int i = 0; i < N; i++) p[i] = raw[(i + best) % N];
+        // tangent / normal / curvature
+        t.resize(N); n.resize(N); k.resize(N); ang.resize(N);
+        for (int i = 0; i < N; i++) {
+            vec3 d = p[(i + 1) % N] - p[(i + N - 1) % N]; d.y = 0;
+            t[i] = normalize(d);
+            n[i] = vec3(-t[i].z, 0, t[i].x);
+            ang[i] = std::atan2(t[i].z, t[i].x);
+        }
+        std::vector<float> kr(N);
+        for (int i = 0; i < N; i++) kr[i] = wrapAngle(ang[(i + 1) % N] - ang[(i + N - 1) % N]) / (2 * ds);
+        for (int i = 0; i < N; i++) {      // box smoothing
+            float s = 0; for (int q = -5; q <= 5; q++) s += kr[wrap(i + q)];
+            k[i] = s / 11.f;
+        }
+        bmin = vec3(1e9f, 0, 1e9f); bmax = vec3(-1e9f, 0, -1e9f);
+        for (auto& q : p) { bmin.x = std::min(bmin.x, q.x); bmin.z = std::min(bmin.z, q.z); bmax.x = std::max(bmax.x, q.x); bmax.z = std::max(bmax.z, q.z); }
+        center = (bmin + bmax) * 0.5f;
+        for (int i = 0; i < N; i++) grid[cellKey(p[i].x, p[i].z)].push_back(i);
+    }
 
     }
 };
