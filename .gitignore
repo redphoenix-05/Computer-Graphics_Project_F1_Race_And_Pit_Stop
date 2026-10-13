@@ -1,0 +1,169 @@
+# ==========================================
+# C / C++ Compiled Binaries & Executables
+# ==========================================
+*.exe
+*.out
+*.app
+*.bin
+*.hex
+*.com
+
+# Heavy third-party binary accidentally placed in project root
+tectonic.exe
+
+# ==========================================
+# Object Files & Intermediate Build Files
+# ==========================================
+*.o
+*.obj
+*.so
+*.dylib
+
+# Default ignore for binary libraries, with exceptions below
+*.dll
+*.a
+*.lib
+
+# Preserve project-bundled dependencies needed to build & run
+!/glfw3.dll
+!/lib/
+!/lib/**
+
+# ==========================================
+# Build Systems & Debug Output
+# ==========================================
+# MSVC / MinGW debug files
+*.pdb
+*.ilk
+*.idb
+*.exp
+*.map
+*.log
+*.tlog
+
+# Output directories
+build/
+bin/
+out/
+dist/
+x64/
+x86/
+Debug/
+Release/
+
+# CMake cache and artifacts
+CMakeFiles/
+CMakeScripts/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+cmake-build-*/
+
+# ==========================================
+# LaTeX Compilation Artifacts & Auxiliary Files
+# ==========================================
+*.aux
+*.bbl
+*.blg
+*.brf
+*.fls
+*.fdb_latexmk
+*.idx
+*.ilg
+*.ind
+*.lof
+*.lot
+*.nav
+*.out
+*.snm
+*.synctex.gz
+*.synctex(busy)
+*.toc
+*.vrb
+*.xdv
+*.run.xml
+*-blx.bib
+*.bcf
+*.fmt
+.tectonic/
+
+# ==========================================
+# External Reference / Sample Documents
+# ==========================================
+2107050_graphics.pdf
+*_graphics.pdf
+*reference*.pdf
+*sample*.pdf
+!main.pdf
+
+# ==========================================
+# Python Cache & Artifacts
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+.pytest_cache/
+build_unified_master_doc.py
+*.docx
+WORKFLOW_AND_ALGORITHMS.pdf
+
+# ==========================================
+# Temporary, Dump & Scratch Files
+# ==========================================
+no-manifest.specs
+*.specs
+specs_temp
+test_glut.cpp
+test_*
+page1_*
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# ==========================================
+# Runtime Generated Captures & Frame Dumps
+# ==========================================
+raytrace.bmp
+*.ppm
+shots/*
+!shots/.keep
+
+# ==========================================
+# IDE & Editor Settings
+# ==========================================
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosv
+*.sln.docstates
+*.vcxproj.user
+
+# VS Code (preserve shared tasks and include paths, ignore local caches)
+.vscode/*
+!.vscode/tasks.json
+!.vscode/c_cpp_properties.json
+!.vscode/launch.json
+.vscode/.browse.VC.db*
+
+# JetBrains / CLion
+.idea/
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# ==========================================
+# Operating System Files
+# ==========================================
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.AppleDouble
+.LSOverride
