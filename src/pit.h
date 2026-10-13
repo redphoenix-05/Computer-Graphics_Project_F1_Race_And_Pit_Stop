@@ -82,5 +82,66 @@ struct Crew {
         rKn->local = translate(0, -0.43f, 0) * rotZ(-p.rKn);
     }
     // follow key-framed path; t = time since keys were set
+    void follow(float t, float dt, float time) {
+        if (!keys.empty()) {
+            size_t k = 0;
+            while (k + 1 < keys.size() && t >= keys[k + 1].t) k++;
+            if (k + 1 >= keys.size()) { pos = keys.back().pos; yaw = keys.back().yaw; act = keys.back().act; }
+            else {
+                const Key &a = keys[k], &b = keys[k + 1];
+                float u = smoothstepf(a.t, b.t, t);
+                pos = mix(a.pos, b.pos, u);
+                yaw = a.yaw + wrapAngle(b.yaw - a.yaw) * smoothstepf(a.t, std::min(b.t, a.t + 0.35f), t);
+                act = a.act;
+            }
+        }
+        float dist = length(pos - prev);
+        speed = dt > 1e-5f ? dist / dt : 0.f;
+        prev = pos;
+        phase += dist * 2.6f;
+        // ---- build the pose --------------------------------------------------
+        Pose p;
+        bool moving = speed > 0.45f;
+        float sw = std::sin(phase);
+        float amp = clampf(speed / 3.2f, 0.35f, 1.25f);
+        if (moving) {
+            p.lHip = sw * 0.85f * amp; p.rHip = -sw * 0.85f * amp;
+            p.lKn = std::max(0.f, -sw) * 1.15f * amp; p.rKn = std::max(0.f, sw) * 1.15f * amp;
+            p.lean = 0.14f * amp;
+        }
+        auto crouch = [&](float a) { p.lHip = p.rHip = 0.9f * a; p.lKn = p.rKn = 1.4f * a; p.crouch = 0.216f * a; };
+        float jit = gunning ? std::sin(time * 55.f) * 0.035f : 0.f;
+        switch (act) {
+            case A_IDLE: case A_RUN:
+                if (moving) { p.lSh = -sw * 0.9f * amp; p.rSh = sw * 0.9f * amp; p.lEl = p.rEl = 0.9f; }
+                else { p.lSh = 0.05f; p.rSh = -0.05f; p.lAbd = p.rAbd = 0.08f; }
+                break;
+            case A_CARRY:
+                p.lSh = p.rSh = 1.15f; p.lEl = p.rEl = 0.75f; p.lAbd = p.rAbd = 0.15f;
+                if (!moving) p.lean = -0.05f;
+                break;
+            case A_GUN:
+                if (moving) { p.lSh = -sw * 0.9f * amp; p.rSh = sw * 0.9f * amp; p.lEl = p.rEl = 0.9f; }
+                else {
+                    crouch(0.85f); p.lean = 0.35f;
+                    p.lSh = 1.40f + jit; p.rSh = 1.45f - jit; p.lEl = 0.35f; p.rEl = 0.25f;
+                }
+                break;
+            case A_UP:
+                p.lSh = p.rSh = 2.85f; p.lAbd = p.rAbd = 0.25f; p.lEl = p.rEl = 0.1f;
+                if (moving) { p.lean = 0.05f; }
+                break;
+            case A_JACK:
+                if (!moving) { crouch(0.55f); p.lean = 0.25f; }
+                p.lSh = 0.95f + jit * 3.f; p.rSh = 1.0f - jit * 3.f; p.lEl = 0.6f; p.rEl = 0.5f;
+                break;
+            case A_SIGN:
+                p.rSh = 2.75f; p.rEl = 0.15f; p.lSh = moving ? -sw * 0.8f * amp : 0.1f; p.lEl = 0.4f;
+                break;
+        }
+        setPose(p);
+        root->local = translate(pos) * rotY(-yaw);
+    }
+};
 
 };
