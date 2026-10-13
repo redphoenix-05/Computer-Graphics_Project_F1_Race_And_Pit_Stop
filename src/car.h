@@ -493,6 +493,20 @@ struct Car {
         float lim = steerLimit(std::fabs(v)) * 1.25f;
         float dl = clampf(steer, -lim, lim);
         float omega = v / WB * std::tan(dl);
-
+        float ay = v * omega, ayMax = aLatMax(std::fabs(v)) * gripF;
+        if (std::fabs(ay) > ayMax && std::fabs(v) > 0.5f) {
+            float ex = std::fabs(ay) - ayMax;
+            omega = sgn(omega) * ayMax / std::fabs(v);
+            v -= sgn(v) * std::min(std::fabs(v), ex * 0.12f * dt * 8.f);     // understeer scrub
+            ay = sgn(ay) * ayMax;
+        }
+        speed = v; yawRate = omega; latAcc = ay;
+        heading = wrapAngle(heading + omega * dt);
+        pos += forward() * (speed * dt);
+        for (int w = 0; w < 4; w++) spin[w] = std::fmod(spin[w] - speed * dt / WHEEL_R[w], 2 * PI_F);
+        // tyre wear: longer/harder driving wears faster
+        if (ctrl != CTRL_PIT && ctrl != CTRL_GRID)
+            wear = std::min(1.f, wear + dt * (0.0016f + 0.00004f * std::fabs(ay) + 0.00005f * std::fabs(std::min(a, 0.f))) * (std::fabs(v) / 60.f));
     }
 };
+
