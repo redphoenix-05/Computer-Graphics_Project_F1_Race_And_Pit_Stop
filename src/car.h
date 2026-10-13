@@ -510,3 +510,42 @@ struct Car {
     }
 };
 
+// ---------------------------------------------------------------------------
+//  Racing driver: pure-pursuit steering on the spline + speed profile, with simple
+//  racecraft - finds a car ahead, chooses a free passing lane, uses the slipstream
+//  and returns to its own line afterwards.  Each car's pace drifts over time so
+//  the running order really changes during the race.
+// ---------------------------------------------------------------------------
+inline void driverControl(const Track& tr, Car& c, const std::vector<Car>& cars, float dt, float time, float& thr, float& brk, float& steerTarget) {
+    auto signedGap = [&](const Car& o) { float g = tr.wrapS(o.s - c.s); return g > tr.L * 0.5f ? g - tr.L : g; };
+    const Car* lead = nullptr; float leadGap = 1e9f;
+    for (const Car& o : cars) {
+        if (o.id == c.id || o.ctrl == CTRL_PIT || o.ctrl == CTRL_GRID) continue;
+        float g = signedGap(o) - 5.0f;                           // bumper-to-bumper
+        if (g < -3.f || g > 42.f) continue;
+        if (std::fabs(o.d - c.lineCur) < 2.7f && g < leadGap) { lead = &o; leadGap = g; }
+    }
+    if (lead) {
+        float side = (lead->d > 0.f) ? -1.f : 1.f;
+        float cand = lead->d + side * 3.1f;
+        if (std::fabs(cand) > 5.0f) { side = -side; cand = lead->d + side * 3.1f; }
+        cand = clampf(cand, -5.0f, 5.0f);
+        bool free = true;
+        for (const Car& o : cars) {
+            if (o.id == c.id || o.id == lead->id || o.ctrl == CTRL_PIT || o.ctrl == CTRL_GRID) continue;
+            if (std::fabs(signedGap(o)) < 13.f && std::fabs(o.d - cand) < 2.4f) free = false;
+        }
+        if (free) { c.lineTarget = cand; c.passHold = 2.6f; }
+    } else if (c.passHold > 0.f) c.passHold -= dt;
+    else c.lineTarget = c.lineBase;
+    c.lineCur += clampf(c.lineTarget - c.lineCur, -2.4f * dt, 2.4f * dt);
+
+    // steering: pure pursuit towards a point on the current lateral line
+    float Ld = clampf(8.f + 0.5f * std::max(0.f, c.speed), 10.f, 48.f);
+    vec3 tgt = tr.pos(c.s + Ld, c.lineCur);
+    vec3 to = tgt - c.pos;
+    float alpha = wrapAngle(std::atan2(to.z, to.x) - c.heading);
+    steerTarget = std::atan2(2.f * Car::WB * std::sin(alpha), Ld);
+
+
+}
