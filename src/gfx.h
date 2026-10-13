@@ -96,5 +96,38 @@ struct MeshBuilder {
     void boxAt(const vec3& c, const vec3& h, const Mat& m, const Mat* top = nullptr) {
         box(translate(c), h, m, top);
     }
+    // Truncated cone / cylinder along local Y from -h to +h (r0 bottom, r1 top)
+    void cyl(const mat4& T, float r0, float r1, float h, int seg, const Mat& m, bool capTop = true, bool capBot = true) {
+        float dr = r1 - r0;
+        for (int i = 0; i < seg; i++) {
+            float a0 = 2 * PI_F * i / seg, a1 = 2 * PI_F * (i + 1) / seg;
+            float c0 = std::cos(a0), s0 = std::sin(a0), c1 = std::cos(a1), s1 = std::sin(a1);
+            vec3 n0 = normalize(vec3(2 * h * c0, -dr, 2 * h * s0)), n1 = normalize(vec3(2 * h * c1, -dr, 2 * h * s1));
+            vec3 b0 = T.point({r0 * c0, -h, r0 * s0}), b1 = T.point({r0 * c1, -h, r0 * s1});
+            vec3 t0 = T.point({r1 * c0, h, r1 * s0}), t1 = T.point({r1 * c1, h, r1 * s1});
+            quadSmooth(b0, b1, t1, t0, xformNormal(T, n0), xformNormal(T, n1), xformNormal(T, n1), xformNormal(T, n0), m);
+            if (capTop && r1 > 0) tri(T.point({0, h, 0}), t1, t0, xformNormal(T, {0, 1, 0}), m);
+            if (capBot && r0 > 0) tri(T.point({0, -h, 0}), b0, b1, xformNormal(T, {0, -1, 0}), m);
+        }
+    }
+    void sphere(const mat4& T, float r, int seg, int stacks, const Mat& m) {
+        for (int j = 0; j < stacks; j++) {
+            float p0 = PI_F * j / stacks, p1 = PI_F * (j + 1) / stacks;
+            for (int i = 0; i < seg; i++) {
+                float a0 = 2 * PI_F * i / seg, a1 = 2 * PI_F * (i + 1) / seg;
+                auto P = [&](float p, float a) { return vec3(std::sin(p) * std::cos(a), std::cos(p), std::sin(p) * std::sin(a)); };
+                vec3 q00 = P(p0, a0), q01 = P(p0, a1), q10 = P(p1, a0), q11 = P(p1, a1);
+                quadSmooth(T.point(q00 * r), T.point(q10 * r), T.point(q11 * r), T.point(q01 * r),
+                           xformNormal(T, q00), xformNormal(T, q10), xformNormal(T, q11), xformNormal(T, q01), m);
+            }
+        }
+    }
+    // Cylinder / cone between two world points (used for suspension arms, halo, limbs ...)
+    void tube(const vec3& a, const vec3& b, float r0, float r1, int seg, const Mat& m, bool caps = true) {
+        vec3 d = b - a; float len = length(d);
+        if (len < 1e-5f) return;
+        mat4 T = frameY((a + b) * 0.5f, d);
+        cyl(T, r0, r1, len * 0.5f, seg, m, caps, caps);
+    }
 
 };
