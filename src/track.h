@@ -122,5 +122,60 @@ struct Track {
         for (int i = 0; i < N; i++) grid[cellKey(p[i].x, p[i].z)].push_back(i);
     }
 
+    static long long cellKey(float x, float z) {
+        return ((long long)std::floor(x / 60.f) + 5000) * 10000LL + ((long long)std::floor(z / 60.f) + 5000);
+    }
+    // distance from a world point to the circuit centre line (spatial hash)
+    float distToTrack(float x, float z) const {
+        float best = 1e9f;
+        int cx = (int)std::floor(x / 60.f), cz = (int)std::floor(z / 60.f);
+        for (int a = -2; a <= 2; a++)
+            for (int b = -2; b <= 2; b++) {
+                auto it = grid.find(((long long)(cx + a) + 5000) * 10000LL + ((long long)(cz + b) + 5000));
+                if (it == grid.end()) continue;
+                for (int i : it->second) {
+                    float dx = p[i].x - x, dz = p[i].z - z;
+                    best = std::min(best, std::sqrt(dx * dx + dz * dz));
+                }
+            }
+        return best;
+    }
+
+    // interpolated point at arc length s and lateral offset d (to the right)
+    vec3 pos(float s, float d = 0) const {
+        s = wrapS(s);
+        float f = s / ds; int i = (int)f; float u = f - i;
+        int a = wrap(i), b = wrap(i + 1);
+        vec3 c = mix(p[a], p[b], u);
+        vec3 nn = normalize(mix(n[a], n[b], u));
+        return c + nn * d;
+    }
+    vec3 tangent(float s) const {
+        float f = wrapS(s) / ds; int i = (int)f; float u = f - i;
+        return normalize(mix(t[wrap(i)], t[wrap(i + 1)], u));
+    }
+    vec3 normal(float s) const { vec3 tt = tangent(s); return vec3(-tt.z, 0, tt.x); }
+    float curvature(float s) const {
+        float f = wrapS(s) / ds; int i = (int)f; float u = f - i;
+        return mixf(k[wrap(i)], k[wrap(i + 1)], u);
+    }
+    float heading(float s) const { vec3 tt = tangent(s); return std::atan2(tt.z, tt.x); }
+
+    // Project a world position on the circuit; hint = previous sample (or -1 for global search)
+    Proj project(const vec3& q, int hint, int window = 40) const {
+        int bi = 0; float bd = 1e18f;
+        auto test = [&](int i) {
+            float dx = p[i].x - q.x, dz = p[i].z - q.z, dd = dx * dx + dz * dz;
+            if (dd < bd) { bd = dd; bi = i; }
+        };
+        if (hint < 0) for (int i = 0; i < N; i++) test(i);
+        else for (int o = -window; o <= window; o++) test(wrap(hint + o));
+        Proj r; r.i = bi;
+        vec3 dv = q - p[bi];
+        r.s = wrapS(bi * ds + dot(dv, t[bi]));
+        r.d = dot(dv, n[bi]);
+        return r;
+    }
+
     }
 };
