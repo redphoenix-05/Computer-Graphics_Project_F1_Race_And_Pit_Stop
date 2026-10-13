@@ -460,5 +460,39 @@ struct Car {
     // world matrix a wheel would have if it were mounted (used by the pit animation)
     mat4 mountedWheelMatrix(int w) const { return hub[w]->world * (WHEEL_Z[w] < 0 ? rotY(PI_F) : mat4()); }
 
+    // ---- dynamics ----------------------------------------------------------
+    static float aLatMax(float v) { return 24.f + 22.f * std::min(1.f, (v * v) / 6400.f); }
+    static float steerLimit(float v) {      // largest useful wheel angle at speed v
+        v = std::max(v, 1.f);
+        return clampf(1.12f * WB * aLatMax(v) / (v * v), 0.035f, 0.52f);
+    }
+    // surface: 0 = asphalt/kerb, 1 = runoff
+    void dynamics(float dt, float thr_, float brk_, float steerTarget, float surfaceGrip, bool allowReverse) {
+        thr = thr_; brk = brk_;
+        float v = speed;
+        float gripF = (1.f - 0.14f * wear) * surfaceGrip;
+        float a = 0;
+        float vr = std::max(0.f, v);
+        a += thr * 13.5f * (1.f - (vr * vr) / (105.f * 105.f)) * (0.9f + 0.1f * gripF);
+        if (brk > 0) {
+            if (v > 0.6f) a -= brk * 46.f * std::min(1.f, gripF + 0.1f);
+            else if (allowReverse && thr < 0.05f) a -= brk * 8.f;
+        }
+        a -= 0.0006f * v * std::fabs(v) + (v > 0.05f ? 0.25f : (v < -0.05f ? -0.25f : 0.f));
+        if (surfaceGrip < 0.99f) a -= sgn(v) * 5.5f * std::min(1.f, std::fabs(v) / 20.f);
+        float v0 = v;
+        v += a * dt;
+        if (v0 > 0 && v < 0 && brk > 0.05f && thr < 0.05f && !allowReverse) v = 0;
+        if (v0 > 0 && v < 0 && thr > 0.05f) v = 0;
+        if (v < -12.f) v = -12.f;
+        if (std::fabs(v) < 0.08f && thr < 0.02f && brk < 0.02f) v = 0;
+        longAcc = (v - v0) / std::max(dt, 1e-4f);
+        // steering with slew-rate limit
+        float rate = 2.4f * dt;
+        steer += clampf(steerTarget - steer, -rate, rate);
+        float lim = steerLimit(std::fabs(v)) * 1.25f;
+        float dl = clampf(steer, -lim, lim);
+        float omega = v / WB * std::tan(dl);
 
+    }
 };
