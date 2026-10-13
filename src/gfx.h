@@ -129,5 +129,49 @@ struct MeshBuilder {
         mat4 T = frameY((a + b) * 0.5f, d);
         cyl(T, r0, r1, len * 0.5f, seg, m, caps, caps);
     }
+    // Rectangular loft along X between two cross sections (nose cones, sidepods ...)
+    void loft(const mat4& T, float x0, float x1, LoftSec s0, LoftSec s1, const Mat& m, const Mat* top = nullptr) {
+        auto P = [&](float x, const LoftSec& s, float ys, float zs) { return T.point({x, s.cy + ys * s.hh, zs * s.hw}); };
+        vec3 in = T.point({(x0 + x1) * 0.5f, (s0.cy + s1.cy) * 0.5f, 0});
+        // top, bottom, left(-z), right(+z), back(x0), front(x1)
+        quadOut(P(x0, s0, 1, -1), P(x1, s1, 1, -1), P(x1, s1, 1, 1), P(x0, s0, 1, 1), in, top ? *top : m);
+        quadOut(P(x0, s0, -1, -1), P(x1, s1, -1, -1), P(x1, s1, -1, 1), P(x0, s0, -1, 1), in, m);
+        quadOut(P(x0, s0, -1, -1), P(x1, s1, -1, -1), P(x1, s1, 1, -1), P(x0, s0, 1, -1), in, m);
+        quadOut(P(x0, s0, -1, 1), P(x1, s1, -1, 1), P(x1, s1, 1, 1), P(x0, s0, 1, 1), in, m);
+        quadOut(P(x0, s0, -1, -1), P(x0, s0, 1, -1), P(x0, s0, 1, 1), P(x0, s0, -1, 1), in, m);
+        quadOut(P(x1, s1, -1, -1), P(x1, s1, 1, -1), P(x1, s1, 1, 1), P(x1, s1, -1, 1), in, m);
+    }
+    // Surface of revolution about local Z (wheels, tyres, rims).  Profile is (radius, z).
+    void lathe(const mat4& T, const std::vector<ProfilePt>& pr, int seg, float spec, float shin, float tex = 0.f) {
+        int K = (int)pr.size() - 1;
+        std::vector<vec3> sn(K);   // segment normals in (r,z) plane stored as (nr,nz,0)
+        for (int k = 0; k < K; k++) {
+            float dr = pr[k + 1].r - pr[k].r, dz = pr[k + 1].z - pr[k].z;
+            float l = std::sqrt(dr * dr + dz * dz); if (l < 1e-9f) l = 1;
+            sn[k] = vec3(dz / l, -dr / l, 0);
+        }
+        auto ptN = [&](int k, int segIdx) {   // normal at profile point k as seen from segment segIdx
+            if (pr[k].sharp) return sn[segIdx];
+            vec3 a = (k > 0) ? sn[k - 1] : sn[0], b = (k < K) ? sn[k] : sn[K - 1];
+            vec3 s = a + b; float l = std::sqrt(s.x * s.x + s.y * s.y); if (l < 1e-9f) return sn[segIdx];
+            return vec3(s.x / l, s.y / l, 0);
+        };
+        for (int k = 0; k < K; k++) {
+            vec3 na = ptN(k, k), nb = ptN(k + 1, k);
+            for (int i = 0; i < seg; i++) {
+                float a0 = 2 * PI_F * i / seg, a1 = 2 * PI_F * (i + 1) / seg;
+                float c0 = std::cos(a0), s0 = std::sin(a0), c1 = std::cos(a1), s1 = std::sin(a1);
+                auto V = [&](float r, float z, float c, float s) { return T.point({r * c, r * s, z}); };
+                auto N = [&](const vec3& n, float c, float s) { return xformNormal(T, {n.x * c, n.x * s, n.y}); };
+                Mat ma = MT(pr[k].c, spec, shin, 0, tex), mb = MT(pr[k + 1].c, spec, shin, 0, tex);
+                vert(V(pr[k].r, pr[k].z, c0, s0), N(na, c0, s0), ma);
+                vert(V(pr[k + 1].r, pr[k + 1].z, c0, s0), N(nb, c0, s0), mb);
+                vert(V(pr[k + 1].r, pr[k + 1].z, c1, s1), N(nb, c1, s1), mb);
+                vert(V(pr[k].r, pr[k].z, c0, s0), N(na, c0, s0), ma);
+                vert(V(pr[k + 1].r, pr[k + 1].z, c1, s1), N(nb, c1, s1), mb);
+                vert(V(pr[k].r, pr[k].z, c1, s1), N(na, c1, s1), ma);
+            }
+        }
+    }
 
 };
