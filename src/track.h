@@ -177,5 +177,42 @@ struct Track {
         return r;
     }
 
+    // Maximum speed along a line offset by 'lateral' from the centre line.
+    // Corner speed solves v^2 = R * aLat(v) with aLat(v) = a0 + aeroK*v^2 (downforce),
+    // followed by forward (acceleration) and backward (braking) passes.
+    std::vector<float> speedProfile(float lateral, float a0, float aeroK, float vmax, float aAcc, float aBrk) const {
+        std::vector<float> v(N);
+        for (int i = 0; i < N; i++) {
+            float ko = k[i] / std::max(0.2f, 1.f - lateral * k[i]);
+            float R = 1.f / std::max(std::fabs(ko), 1e-4f);
+            float den = 1.f - aeroK * R;
+            v[i] = den <= 0.05f ? vmax : std::min(vmax, std::sqrt(a0 * R / den));
+        }
+        for (int pass = 0; pass < 3; pass++) {
+            for (int i = 2 * N; i > 0; i--) {           // braking (backwards)
+                int a = wrap(i - 1), b = wrap(i);
+                v[a] = std::min(v[a], std::sqrt(v[b] * v[b] + 2 * aBrk * ds));
+            }
+            for (int i = 0; i < 2 * N; i++) {           // acceleration (forwards)
+                int a = wrap(i), b = wrap(i + 1);
+                v[b] = std::min(v[b], std::sqrt(v[a] * v[a] + 2 * aAcc * ds));
+            }
+        }
+        return v;
     }
+    float sample(const std::vector<float>& v, float s) const {
+        float f = wrapS(s) / ds; int i = (int)f; float u = f - i;
+        return mixf(v[wrap(i)], v[wrap(i + 1)], u);
+    }
+
+    // ---- barriers / limits -------------------------------------------------
+    float leftLimit(float) const { return -14.f; }
+    // right limit measured from the centre line.  inLane: car is on the pit-lane
+    // side of the pit wall.
+    float rightLimit(float u, bool inLane) const {
+        using namespace PitC;
+        if (u > WALL_X0 && u < WALL_X1) return inLane ? LANE_OUT - 1.2f : WALL_D - 0.9f;
+        return 14.f + (LANE_OUT - 1.2f - 14.f) * pitW(u);
+    }
+    float rightLimitVisual(float u) const { return 14.f + (PitC::LANE_OUT + 0.4f - 14.f) * pitW(u); }
 };
