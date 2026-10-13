@@ -189,6 +189,49 @@ void main() {
     FragColor = vec4(col, 1.0);
 }
 )GLSL";
+
+
+// ---- Decals: text / marking quads textured with the font atlas, lit like the body they sit on
+static const char* DECAL_VS_BODY = R"GLSL(
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec2 aUV;
+layout(location=3) in vec4 aCol;
+uniform mat4 uModel; uniform mat3 uNrmMat; uniform mat4 uVP;
+out vec3 vW; out vec3 vN; out vec2 vUV; out vec4 vC;
+void main() {
+    vec4 w = uModel * vec4(aPos, 1.0);
+    vW = w.xyz; vN = uNrmMat * aNrm; vUV = aUV; vC = aCol;
+    gl_Position = uVP * w;
+}
+)GLSL";
+static const char* DECAL_FS_BODY = R"GLSL(
+in vec3 vW; in vec3 vN; in vec2 vUV; in vec4 vC;
+uniform sampler2D uFont;
+out vec4 FragColor;
+void main() {
+    float a = texture(uFont, vUV).r * vC.a;
+    if (a < 0.02) discard;
+    vec3 N = normalize(vN);
+    if (!gl_FrontFacing) N = -N;
+    vec3 c = lightModel(vW, N, vC.rgb, 0.35, 40.0, 0.0);
+    FragColor = vec4(finish(c, length(uCamPos - vW)), a);
+}
+)GLSL";
+
+static const char* SHADOW_VS = R"GLSL(
+#version 330 core
+layout(location=0) in vec3 aPos;
+uniform mat4 uModel, uVP;
+out vec2 vL;
+void main() { vL = aPos.xz; gl_Position = uVP * uModel * vec4(aPos, 1.0); }
+)GLSL";
+static const char* SHADOW_FS = R"GLSL(
+#version 330 core
+in vec2 vL; uniform float uAlpha; out vec4 FragColor;
+void main() { float a = (1.0 - smoothstep(0.25, 1.0, length(vL))) * uAlpha; FragColor = vec4(0.0, 0.0, 0.0, a); }
+)GLSL";
+
 // ---------------------------------------------------------------------------
 //  Shader program wrapper
 // ---------------------------------------------------------------------------
@@ -505,3 +548,100 @@ struct Mesh {
     }
     void draw() const { if (count) { glBindVertexArray(vao); glDrawArrays(GL_TRIANGLES, 0, count); } }
 };
+
+
+// ---------------------------------------------------------------------------
+//  Decals: text and marking quads (sponsor names, race numbers, tyre lettering)
+// ---------------------------------------------------------------------------
+struct DecalVertex { float p[3], n[3], uv[2], c[4]; };
+struct DecalMesh {
+    GLuint vao = 0, vbo = 0; GLsizei count = 0;
+    void upload(const std::vector<DecalVertex>& v) {
+        count = (GLsizei)v.size();
+        if (!vao) { glGenVertexArrays(1, &vao); glGenBuffers(1, &vbo); }
+        glBindVertexArray(vao); glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(DecalVertex), v.data(), GL_STATIC_DRAW);
+        GLsizei st = sizeof(DecalVertex);
+        glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, st, (void*)0);
+        glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, st, (void*)12);
+        glEnableVertexAttribArray(2); glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, st, (void*)24);
+        glEnableVertexAttribArray(3); glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, st, (void*)32);
+    }
+    void draw() const { if (count) { glBindVertexArray(vao); glDrawArrays(GL_TRIANGLES, 0, count); } }
+};
+// surf(u, v, pos, normal): maps 2D layout coordinates (metres) onto the surface the decal sits on
+typedef std::function<void(float, float, vec3&, vec3&)> SurfFn;
+struct DecalBuilder {
+    std::vector<DecalVertex> v;
+    void glyphQuad(const vec3 p[4], const vec3& n, float u0, float v0, float u1, float v1, const vec3& col, float a) {
+        float uv[4][2] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};   // p0 bottom-left, p1 bottom-right, p2 top-right, p3 top-left
+        int idx[6] = {0, 1, 2, 0, 2, 3};
+        for (int k = 0; k < 6; k++) {
+            DecalVertex d; int i = idx[k];
+            d.p[0] = p[i].x; d.p[1] = p[i].y; d.p[2] = p[i].z; d.n[0] = n.x; d.n[1] = n.y; d.n[2] = n.z;
+            d.uv[0] = uv[i][0]; d.uv[1] = uv[i][1]; d.c[0] = col.x; d.c[1] = col.y; d.c[2] = col.z; d.c[3] = a;
+            v.push_back(d);
+        }
+    }
+    // text with its baseline-left corner at (u0, v0); glyph height h (metres); returns width
+    float text(const std::string& str, float u0, float v0, float h, const vec3& col, const SurfFn& surf, float a = 1.f, float spacing = 0.92f) {
+        float w = h * 0.5f * spacing * 1.f;   // advance
+        float gw = h * 0.5f;
+        for (size_t i = 0; i < str.size(); i++) {
+            int ch = (unsigned char)str[i]; if (ch < 32 || ch > 126) ch = '?';
+            if (ch == ' ') continue;
+            int idx = ch - 32, cx = idx % FONT_COLS, cy = idx / FONT_COLS;
+            float tu0 = (cx * FONT_CW + 1.5f) / FONT_W, tv0 = (cy * FONT_CH + 3.f) / FONT_H;
+            float tu1 = (cx * FONT_CW + FONT_CW - 1.5f) / FONT_W, tv1 = (cy * FONT_CH + FONT_CH - 3.f) / FONT_H;
+            float ua = u0 + i * w, ub = ua + gw;
+            vec3 p[4], n0, n1, n2, n3, nn;
+            surf(ua, v0, p[0], n0); surf(ub, v0, p[1], n1); surf(ub, v0 + h, p[2], n2); surf(ua, v0 + h, p[3], n3);
+            nn = normalize(n0 + n1 + n2 + n3);
+            glyphQuad(p, nn, tu0, tv0, tu1, tv1, col, a);
+        }
+        return str.size() * w;
+    }
+    float width(const std::string& s, float h) const { return s.size() * h * 0.5f * 0.92f; }
+    // solid coloured strip (uses the white block of the atlas), subdivided so it follows curved surfaces
+    void bar(float u0, float v0, float w, float h, const vec3& col, const SurfFn& surf, int seg = 4, float a = 1.f) {
+        float tu = 16.f / FONT_W, tv = 304.f / FONT_H;
+        for (int i = 0; i < seg; i++) {
+            float ua = u0 + w * i / seg, ub = u0 + w * (i + 1) / seg;
+            vec3 p[4], n0, n1, n2, n3;
+            surf(ua, v0, p[0], n0); surf(ub, v0, p[1], n1); surf(ub, v0 + h, p[2], n2); surf(ua, v0 + h, p[3], n3);
+            glyphQuad(p, normalize(n0 + n1 + n2 + n3), tu, tv, tu, tv, col, a);
+        }
+    }
+};
+static GLuint makeNoiseTexture() {
+    const int S = 256;
+    std::vector<unsigned char> d(S * S);
+    auto hashv = [](int x, int y, int seed) {
+        unsigned h = (unsigned)(x * 374761393 + y * 668265263 + seed * 69069);
+        h = (h ^ (h >> 13)) * 1274126177u; h ^= h >> 16; return (h & 0xffff) / 65535.f;
+    };
+    for (int y = 0; y < S; y++)
+        for (int x = 0; x < S; x++) {
+            float sum = 0, amp = 0.5f, tot = 0;
+            for (int o = 0; o < 5; o++) {
+                int f = 4 << o;
+                float fx = (float)x / S * f, fy = (float)y / S * f;
+                int ix = (int)fx, iy = (int)fy; float tx = fx - ix, ty = fy - iy;
+                tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+                auto H = [&](int a, int b) { return hashv(a % f, b % f, o); };
+                float v = mixf(mixf(H(ix, iy), H(ix + 1, iy), tx), mixf(H(ix, iy + 1), H(ix + 1, iy + 1), tx), ty);
+                sum += v * amp; tot += amp; amp *= 0.5f;
+            }
+            d[y * S + x] = (unsigned char)(clampf(sum / tot, 0, 1) * 255);
+        }
+    GLuint t; glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, S, S, 0, GL_RED, GL_UNSIGNED_BYTE, d.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    return t;
+}
+
