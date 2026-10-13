@@ -104,5 +104,53 @@ struct World {
         }
     }
 
-    void build(const Track& tr) { T = &tr; buildGround(); }
+    void buildRoad() {
+        int N = T->N;
+        Mat asph = MT(vec3(0.21f, 0.21f, 0.23f), 0.15f, 20.f, 0.f, 0.55f);
+        Mat asph2 = MT(vec3(0.19f, 0.19f, 0.21f), 0.15f, 20.f, 0.f, 0.55f);
+        strip(road, 0, N, [](float) { return -7.f; }, [](float) { return 7.f; }, 0.f,
+              [&](int i) { return ((i / 4) & 1) ? asph : asph2; }, 8);
+        // run-off areas: paved / gravel on the outside of corners
+        Mat pave = MT(vec3(0.42f, 0.43f, 0.46f), 0.05f, 10.f, 0.f, 0.5f), grav = MT(vec3(0.70f, 0.64f, 0.48f), 0.f, 8.f, 0.f, 0.9f);
+        for (int side = -1; side <= 1; side += 2) {
+            auto d0 = [&](float) { return side < 0 ? -14.f : 7.f; };
+            auto d1 = [&](float u) { return side < 0 ? -7.f : mixf(14.f, PitC::LANE_IN - 0.1f, pitW(u)); };
+            strip(road, 0, N, d0, d1, -0.01f, [&](int i) {
+                float k = T->k[i];
+                bool outer = (std::fabs(k) > 1.f / 170.f) && ((k > 0 ? -1 : 1) == side);
+                return outer ? grav : pave; }, 4);
+        }
+        // kerbs on the inside of corners (red/white) + edge lines + start/finish
+        Mat red = MT(vec3(0.85f, 0.08f, 0.08f), 0.2f, 20.f), wht = MT(vec3(0.92f, 0.92f, 0.92f), 0.2f, 20.f);
+        Mat line = MT(vec3(0.9f, 0.9f, 0.9f), 0.1f, 10.f);
+        for (int side = -1; side <= 1; side += 2) {
+            auto d0 = [&](float) { return side < 0 ? -8.2f : 7.f; };
+            auto d1 = [&](float) { return side < 0 ? -7.f : 8.2f; };
+            for (int i = 0; i < N; i++) {
+                float k = T->k[i];
+                bool inner = std::fabs(k) > 1.f / 240.f && ((k > 0 ? 1 : -1) == side);
+                if (!inner) continue;
+                strip(marks, i, i + 1, d0, d1, 0.01f, [&](int) { return (i & 1) ? red : wht; }, 1);
+            }
+            auto l0 = [&](float) { return side < 0 ? -6.9f : 6.5f; };
+            auto l1 = [&](float) { return side < 0 ? -6.5f : 6.9f; };
+            strip(marks, 0, N, l0, l1, 0.01f, [&](int) { return line; }, 1);
+        }
+        // start / finish chequered line (2 rows) across track and pit lane, grid slots
+        Mat blk = MT(vec3(0.03f), 0.1f, 10.f);
+        for (int row = 0; row < 2; row++)
+            for (int c = 0; c < 28; c++) {
+                float z0 = -7.f + c * 0.5f + (row == 0 ? 0.f : 0.f);
+                float x0 = -0.5f + row * 0.5f;
+                const Mat& m = ((c + row) & 1) ? blk : wht;
+                marks.at(0, 0).quadUp({x0, 0.f, z0}, {x0, 0.f, z0 + 0.5f}, {x0 + 0.5f, 0.f, z0 + 0.5f}, {x0 + 0.5f, 0.f, z0}, m);
+            }
+        for (int k = 0; k < 5; k++) {   // grid slots
+            float x = -10.f - 9.f * k, z = (k % 2 == 0) ? -2.6f : 2.6f;
+            rectOutline(x - 3.2f, z - 1.2f, x + 0.6f, z + 1.2f, 0.14f, wht);
+        }
+    }
+
+
+    void build(const Track& tr) { T = &tr; buildGround(); buildRoad(); }
 };
