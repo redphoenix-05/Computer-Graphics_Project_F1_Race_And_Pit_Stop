@@ -83,6 +83,11 @@ static const Livery LIVERIES[5] = {
 struct Compound { const char* name; vec3 col; };
 static const Compound COMPOUNDS[3] = {{"SOFT", vec3(0.90f, 0.08f, 0.08f)}, {"MEDIUM", vec3(0.95f, 0.80f, 0.08f)}, {"HARD", vec3(0.92f, 0.92f, 0.92f)}};
 
+static const float WHEEL_X[4] = {1.75f, 1.75f, -1.85f, -1.85f};
+static const float WHEEL_Z[4] = {-0.80f, 0.80f, -0.80f, 0.80f};   // FL, FR, RL, RR
+static const float WHEEL_R[4] = {0.34f, 0.34f, 0.36f, 0.36f};
+static const float WHEEL_W[4] = {0.305f, 0.305f, 0.40f, 0.40f};
+
 typedef MeshBuilder::LoftSt St;
 // ---- station tables of the smooth body parts (x, cy, cz, half-width, half-height, exponent, bottom factor)
 static std::vector<St> stChassis() {
@@ -130,6 +135,51 @@ static float topY(const std::vector<St>& v, float x, float z) {
     St a = stAt(v, x);
     float q = std::min(0.999f, std::fabs(z - a.cz) / std::max(a.hw, 1e-3f));
     return a.cy + a.hh * std::pow(std::max(0.f, 1.f - std::pow(q, a.n)), 1.f / a.n);
+}
+
+// Complete wheel assembly: low-profile tyre (lathe) with coloured compound ring, wheel cover, nut.
+// Axis = local Z, outer face = +Z.
+inline void buildWheel(MeshBuilder& b, float R, float W, const vec3& stripe) {
+    float hw = W * 0.5f;
+    vec3 rub(0.035f, 0.035f, 0.04f), rub2(0.06f, 0.06f, 0.065f);
+    std::vector<ProfilePt> pr;
+    auto side = [&](float sg) {
+        std::vector<ProfilePt> h;
+        h.push_back({0.222f, sg * hw * 0.93f, rub, true});
+        h.push_back({0.236f, sg * hw, rub, false});
+        h.push_back({0.238f, sg * hw, stripe, true});
+        h.push_back({0.252f, sg * hw, stripe, true});
+        h.push_back({0.254f, sg * hw, rub, true});
+        h.push_back({R - 0.030f, sg * hw, rub, false});
+        h.push_back({R - 0.010f, sg * hw * 0.92f, rub, false});
+        h.push_back({R - 0.002f, sg * hw * 0.70f, rub2, false});
+        return h;
+    };
+    std::vector<ProfilePt> a = side(-1.f), c = side(1.f);
+    for (auto& q : a) pr.push_back(q);
+    float g[3] = {-0.28f, 0.f, 0.28f};
+    for (int i = 0; i < 3; i++) {
+        pr.push_back({R, g[i] * W - 0.02f, rub2, true});
+        pr.push_back({R - 0.006f, g[i] * W - 0.012f, rub, true});
+        pr.push_back({R - 0.006f, g[i] * W + 0.012f, rub, true});
+        pr.push_back({R, g[i] * W + 0.02f, rub2, true});
+    }
+    for (int i = (int)c.size() - 1; i >= 0; i--) pr.push_back(c[i]);
+    b.lathe(mat4(), pr, 44, 0.04f, 10.f);
+    // rim barrel + domed wheel cover (2022-style closed wheel)
+    vec3 rimC(0.50f, 0.51f, 0.54f), cover(0.07f, 0.07f, 0.085f);
+    std::vector<ProfilePt> rim = {
+        {0.0f, hw * 0.80f, cover, true}, {0.10f, hw * 0.78f, cover, false}, {0.18f, hw * 0.72f, cover, false},
+        {0.206f, hw * 0.66f, cover, false}, {0.2086f, hw * 0.64f, rimC, true}, {0.2286f, hw * 0.60f, rimC, true},
+        {0.2286f, -hw * 0.88f, rimC, true}};
+    b.lathe(mat4(), rim, 36, 0.55f, 40.f);
+    // cooling slots in the cover
+    for (int i = 0; i < 12; i++) {
+        float a0 = 2 * PI_F * i / 12;
+        b.box(translate(0, 0, hw * 0.79f) * rotZ(a0) * translate(0.14f, 0, 0), vec3(0.03f, 0.006f, 0.004f), MT(vec3(0.01f), 0.2f, 10.f));
+    }
+    b.cyl(translate(0, 0, hw * 0.83f) * rotX(PI_F * 0.5f), 0.040f, 0.040f, 0.014f, 12, MT(vec3(0.95f, 0.85f, 0.10f), 0.8f, 64.f));
+    b.cyl(translate(0, 0, hw * 0.86f) * rotX(PI_F * 0.5f), 0.020f, 0.020f, 0.010f, 8, MT(vec3(0.25f, 0.25f, 0.27f), 0.8f, 64.f));
 }
 
 // Chassis, aerodynamics, suspension and cockpit (without wheels / helmet)
@@ -231,3 +281,118 @@ inline void buildCarBody(MeshBuilder& b, const Livery& L) {
     }
 }
 
+// ---- decals on the body (sponsor names, race numbers) ----------------------------------------------
+inline void buildCarDecals(DecalBuilder& d, const Livery& L) {
+    std::vector<St> pod = stSidepod(1.f), pod2 = stSidepod(-1.f), air = stAirbox(), ch = stChassis();
+    // sidepod sponsor text (both sides, reads front-to-back on each side)
+    for (int sd = -1; sd <= 1; sd += 2) {
+        float s = (float)sd; const std::vector<St>& P = sd > 0 ? pod : pod2;
+        float h = 0.19f, wtxt = d.width(L.sponsor, h), xc = 0.18f, x0 = xc - s * wtxt * 0.5f;
+        SurfFn f = [&, s, x0](float u, float v, vec3& pos, vec3& nrm) {
+            float x = x0 + s * u, y = v, z = sideZ(P, s, x, y) + s * 0.02f;
+            float e = 0.01f;
+            float gx = (sideZ(P, s, x + e, y) - sideZ(P, s, x - e, y)) / (2 * e), gy = (sideZ(P, s, x, y + e) - sideZ(P, s, x, y - e)) / (2 * e);
+            pos = vec3(x, y, z); nrm = normalize(vec3(-gx, -gy, 1.f) * s);
+        };
+        d.text(L.sponsor, 0, 0.345f, h, L.sponsorCol, f);
+        d.bar(0, 0.318f, wtxt, 0.014f, L.second, f, 10);     // trim line under the text
+        // race number on the airbox flank
+        std::string num = L.num; float hn = 0.26f, wn = d.width(num, hn), xn = -0.62f - s * 0 + (s > 0 ? -wn * 0.5f : wn * 0.5f);
+        SurfFn g = [&, s, xn](float u, float v, vec3& pos, vec3& nrm) {
+            float x = xn + s * u, y = v, z = sideZ(air, s, x, y) + s * 0.02f;
+            float e = 0.01f;
+            float gx = (sideZ(air, s, x + e, y) - sideZ(air, s, x - e, y)) / (2 * e), gy = (sideZ(air, s, x, y + e) - sideZ(air, s, x, y - e)) / (2 * e);
+            pos = vec3(x, y, z); nrm = normalize(vec3(-gx, -gy, 1.f) * s);
+        };
+        d.text(num, 0, 0.78f, hn, L.numCol, g);
+    }
+    // race number on the nose (top), reads from behind
+    {
+        std::string num = L.num; float h = 0.17f, w = d.width(num, h);
+        SurfFn f = [&](float u, float v, vec3& pos, vec3& nrm) {
+            float x = 1.62f + v, z = u - w * 0.5f;
+            pos = vec3(x, topY(ch, x, z) + 0.012f, z);
+            float e = 0.01f; float gx = (topY(ch, x + e, z) - topY(ch, x - e, z)) / (2 * e), gz = (topY(ch, x, z + e) - topY(ch, x, z - e)) / (2 * e);
+            nrm = normalize(vec3(-gx, 1.f, -gz));
+        };
+        d.text(num, 0, 0, h, L.numCol, f);
+    }
+    // sponsor on the upper rear-wing flap (reads from behind) and on the front-wing main plane (reads from the front)
+    {
+        std::string t = L.sponsor; float h = 0.11f, w = d.width(t, h);
+        vec3 col = L.sponsorCol; if (length(col) > 1.5f && L.accent.x > 0.9f) col = vec3(0.97f);
+        SurfFn f = [&](float u, float v, vec3& pos, vec3& nrm) {
+            float x = -2.76f - 0.03f + v * -1.f * -1.f; (void)x;
+            float xx = -2.77f + v; float y = 1.140f + 0.014f + 0.22f * (-2.84f + 0.13f - xx) + 0.004f;
+            pos = vec3(xx, y, u - w * 0.5f); nrm = normalize(vec3(0.22f, 1.f, 0));
+        };
+        d.text(t, 0, 0.0f, h * 0.9f, vec3(0.97f), f, 0.95f);
+        for (int sd = -1; sd <= 1; sd += 2) {
+            float s = (float)sd;
+            SurfFn g = [&, s](float u, float v, vec3& pos, vec3& nrm) {
+                float xx = 3.07f - v, z = s * (0.18f) - s * u;                       // reads towards the car centre-line
+                float q = z / 0.96f; float y = 0.050f + 0.070f * q * q + 0.012f + 0.12f * (3.07f - xx) + 0.004f; (void)y;
+                float yy = 0.050f + 0.070f * q * q + 0.012f + 0.12f * (2.90f + 0.17f - xx) + 0.003f;
+                pos = vec3(xx, yy, z); nrm = normalize(vec3(0.12f, 1.f, 0));
+            };
+            d.text("NEXUS", 0, 0.015f, 0.105f, vec3(0.97f, 0.97f, 0.97f), g, 0.95f);
+        }
+    }
+}
+// text on the tyre side wall (arc around the wheel, outer face +Z)
+inline void buildWheelDecal(DecalBuilder& d, float R, float W) {
+    float hw = W * 0.5f, r = (0.256f + R - 0.034f) * 0.5f, h = (R - 0.034f) - 0.258f;
+    h = std::min(h, 0.052f);
+    std::string t = "GRIPTEC";
+    float dth = (h * 0.5f * 0.92f) / r; float th0 = PI_F * 0.5f + dth * (t.size() - 1) * 0.5f;
+    for (size_t i = 0; i < t.size(); i++) {
+        float th = th0 - dth * i;
+        vec3 c(r * std::cos(th), r * std::sin(th), hw + 0.0015f), er(std::cos(th), std::sin(th), 0), ea(std::sin(th), -std::cos(th), 0);
+        float w = h * 0.5f;
+        vec3 p[4] = {c - ea * (w * 0.5f) - er * (h * 0.5f), c + ea * (w * 0.5f) - er * (h * 0.5f), c + ea * (w * 0.5f) + er * (h * 0.5f), c - ea * (w * 0.5f) + er * (h * 0.5f)};
+        int ch = (unsigned char)t[i]; int idx = ch - 32, cx = idx % FONT_COLS, cy = idx / FONT_COLS;
+        float tu0 = (cx * FONT_CW + 1.5f) / FONT_W, tv0 = (cy * FONT_CH + 3.f) / FONT_H, tu1 = (cx * FONT_CW + FONT_CW - 1.5f) / FONT_W, tv1 = (cy * FONT_CH + FONT_CH - 3.f) / FONT_H;
+        d.glyphQuad(p, vec3(0, 0, 1), tu0, tv0, tu1, tv1, vec3(0.92f), 0.95f);
+    }
+    // small second line "P" mark opposite side (bottom)
+    float th = -PI_F * 0.5f;
+    vec3 c(r * std::cos(th), r * std::sin(th), hw + 0.0015f), er(std::cos(th), std::sin(th), 0), ea(std::sin(th), -std::cos(th), 0);
+    float w = h * 0.5f;
+    vec3 p[4] = {c - ea * (w * 0.5f) - er * (h * 0.5f), c + ea * (w * 0.5f) - er * (h * 0.5f), c + ea * (w * 0.5f) + er * (h * 0.5f), c - ea * (w * 0.5f) + er * (h * 0.5f)};
+    int idx = 'P' - 32, cx = idx % FONT_COLS, cy = idx / FONT_COLS;
+    d.glyphQuad(p, vec3(0, 0, 1), (cx * FONT_CW + 1.5f) / FONT_W, (cy * FONT_CH + 3.f) / FONT_H, (cx * FONT_CW + FONT_CW - 1.5f) / FONT_W, (cy * FONT_CH + FONT_CH - 3.f) / FONT_H, vec3(0.92f), 0.95f);
+}
+
+// ---------------------------------------------------------------------------
+//  Car model assets (shared between frames; one body mesh per livery)
+// ---------------------------------------------------------------------------
+struct CarAssets {
+    Mesh body[5];
+    Mesh helmet[5];
+    Mesh steerWheel;
+    Mesh wheel[2][3];           // [front/rear][compound]
+    DecalMesh bodyDecal[5], wheelDecal[2];
+    void build() {
+        for (int i = 0; i < 5; i++) {
+            MeshBuilder b; buildCarBody(b, LIVERIES[i]); body[i].upload(b);
+            DecalBuilder d; buildCarDecals(d, LIVERIES[i]); bodyDecal[i].upload(d.v);
+            MeshBuilder h;
+            h.sphere(translate(0.30f, 0.87f, 0), 0.135f, 20, 14, MT(LIVERIES[i].accent, 0.9f, 90.f));
+            h.box(translate(0.415f, 0.89f, 0), vec3(0.04f, 0.04f, 0.10f), MT(vec3(0.02f, 0.02f, 0.05f), 0.95f, 120.f));
+            h.box(translate(0.20f, 0.66f, 0) * rotZ(-0.2f), vec3(0.14f, 0.12f, 0.17f), MT(vec3(0.85f, 0.85f, 0.85f), 0.3f, 30.f));
+            helmet[i].upload(h);
+        }
+        MeshBuilder s;
+        s.box(mat4(), vec3(0.02f, 0.055f, 0.15f), MT(vec3(0.05f, 0.05f, 0.06f), 0.5f, 40.f));
+        s.box(translate(0.025f, 0.0f, 0), vec3(0.008f, 0.04f, 0.08f), MT(vec3(0.1f, 0.85f, 0.2f), 0.2f, 20.f, 0.8f));
+        for (int i = -1; i <= 1; i += 2) s.box(translate(0.0f, 0.0f, i * 0.17f), vec3(0.03f, 0.07f, 0.03f), MT(vec3(0.1f, 0.1f, 0.1f)));
+        steerWheel.upload(s);
+        for (int f = 0; f < 2; f++) {
+            for (int c = 0; c < 3; c++) {
+                MeshBuilder w; buildWheel(w, f == 0 ? 0.34f : 0.36f, f == 0 ? 0.305f : 0.40f, COMPOUNDS[c].col);
+                wheel[f][c].upload(w);
+            }
+            DecalBuilder d; buildWheelDecal(d, f == 0 ? 0.34f : 0.36f, f == 0 ? 0.305f : 0.40f); wheelDecal[f].upload(d.v);
+        }
+    }
+};
