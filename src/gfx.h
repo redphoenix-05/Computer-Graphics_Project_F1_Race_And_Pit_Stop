@@ -173,5 +173,100 @@ struct MeshBuilder {
             }
         }
     }
+    // ---- smooth lofted bodies --------------------------------------------------------
+    // Cross sections are super-ellipses (exponent n: 2 = ellipse, large = boxier);
+    // vertex normals are averaged from the neighbouring grid points -> smooth shading.
+    struct LoftSt { float x, cy, cz, hw, hh, n, bot; };
+    typedef std::function<Mat(const vec3&, const vec3&)> ColFn;
+    void loftSmooth(const mat4& T, const std::vector<LoftSt>& st, int ring, const ColFn& cf, bool capA = true, bool capB = true) {
+        int S = (int)st.size();
+        std::vector<vec3> P(S * ring), N(S * ring);
+        for (int i = 0; i < S; i++)
+            for (int k = 0; k < ring; k++) {
+                float a = 2.f * PI_F * k / ring, c = std::cos(a), sn = std::sin(a), ex = 2.f / st[i].n;
+                float px = sgn(c) * std::pow(std::fabs(c), ex), py = sgn(sn) * std::pow(std::fabs(sn), ex);
+                if (py < 0) py *= st[i].bot;
+                P[i * ring + k] = vec3(st[i].x, st[i].cy + py * st[i].hh, st[i].cz + px * st[i].hw);
+            }
+        for (int i = 0; i < S; i++)
+            for (int k = 0; k < ring; k++) {
+                vec3 t1 = P[std::min(i + 1, S - 1) * ring + k] - P[std::max(i - 1, 0) * ring + k];
+                vec3 t2 = P[i * ring + (k + 1) % ring] - P[i * ring + (k + ring - 1) % ring];
+                vec3 ctr(st[i].x, st[i].cy, st[i].cz), out = P[i * ring + k] - ctr;
+                vec3 n = cross(t1, t2);
+                if (length(n) < 1e-7f) n = (length(out) > 1e-6f) ? out : vec3(1, 0, 0);
+                n = normalize(n);
+                if (dot(n, out) < 0) n = -n;
+                N[i * ring + k] = n;
+            }
+        auto V = [&](int i, int k) {
+            k %= ring;
+            const vec3& p = P[i * ring + k]; const vec3& n = N[i * ring + k];
+            Mat m = cf(p, n);
+            vert(T.point(p), xformNormal(T, n), m);
+        };
+        for (int i = 0; i + 1 < S; i++)
+            for (int k = 0; k < ring; k++) {
+                V(i, k); V(i + 1, k); V(i + 1, k + 1);
+                V(i, k); V(i + 1, k + 1); V(i, k + 1);
+            }
+        auto cap = [&](int i, float dirx) {
+            vec3 c(st[i].x, st[i].cy, st[i].cz); vec3 n(dirx, 0, 0);
+            Mat m = cf(c, n);
+            for (int k = 0; k < ring; k++) {
+                vert(T.point(c), xformNormal(T, n), m);
+                vert(T.point(P[i * ring + k]), xformNormal(T, n), m);
+                vert(T.point(P[i * ring + (k + 1) % ring]), xformNormal(T, n), m);
+            }
+        };
+        if (capA) cap(0, st[0].x > st[S - 1].x ? 1.f : -1.f);
+        if (capB) cap(S - 1, st[0].x > st[S - 1].x ? -1.f : 1.f);
+    }
+    // Extruded convex polygon in the XY plane (end plates, floor edges): z in [zc-th/2, zc+th/2]
+    void extrudePoly(const mat4& T, const std::vector<vec3>& pts, float zc, float th, const Mat& m) {
+        int n = (int)pts.size();
+        vec3 c(0, 0, 0); for (auto& p : pts) c += p; c = c / (float)n;
+        for (int s = -1; s <= 1; s += 2) {
+            float z = zc + s * th * 0.5f; vec3 nn = xformNormal(T, vec3(0, 0, (float)s));
+            for (int i = 0; i < n; i++)
+                tri(T.point({c.x, c.y, z}), T.point({pts[i].x, pts[i].y, z}), T.point({pts[(i + 1) % n].x, pts[(i + 1) % n].y, z}), nn, m);
+        }
+        for (int i = 0; i < n; i++) {
+            const vec3 &a = pts[i], &b = pts[(i + 1) % n];
+            vec3 e = b - a; vec3 nrm = normalize(vec3(e.y, -e.x, 0));
+            if (dot(nrm, vec3((a.x + b.x) * 0.5f - c.x, (a.y + b.y) * 0.5f - c.y, 0)) < 0) nrm = -nrm;
+            quadN(T.point({a.x, a.y, zc - th * 0.5f}), T.point({b.x, b.y, zc - th * 0.5f}), T.point({b.x, b.y, zc + th * 0.5f}),
+                  T.point({a.x, a.y, zc + th * 0.5f}), xformNormal(T, nrm), m);
+        }
+    }
+    // Curved wing element spanning z in [-span, span]; y rises towards the tips (lift * (z/span)^2)
+    void wingElement(const mat4& T, float xc, float chord, float y0, float lift, float pitch, float span, float th, int segs, const Mat& m) {
+        for (int i = 0; i < segs; i++) {
+            float z0 = -span + 2 * span * i / segs, z1 = -span + 2 * span * (i + 1) / segs;
+            auto Y = [&](float z) { float q = z / span; return y0 + lift * q * q; };
+            vec3 le0(xc + chord * 0.5f, Y(z0), z0), te0(xc - chord * 0.5f, Y(z0) + pitch * chord, z0);
+            vec3 le1(xc + chord * 0.5f, Y(z1), z1), te1(xc - chord * 0.5f, Y(z1) + pitch * chord, z1);
+            vec3 d(0, th, 0);
+            vec3 nTop = normalize(cross(le1 - le0, te0 - le0)); if (nTop.y < 0) nTop = -nTop;
+            quadN(T.point(le0 + d), T.point(le1 + d), T.point(te1 + d), T.point(te0 + d), xformNormal(T, nTop), m);
+            quadN(T.point(le0), T.point(le1), T.point(te1), T.point(te0), xformNormal(T, -nTop), m);
+            quadN(T.point(le0), T.point(le1), T.point(le1 + d), T.point(le0 + d), xformNormal(T, vec3(1, 0, 0)), m);
+            quadN(T.point(te0), T.point(te1), T.point(te1 + d), T.point(te0 + d), xformNormal(T, vec3(-1, 0, 0)), m);
+        }
+        for (int s = -1; s <= 1; s += 2) {   // closing end faces
+            float z = s * span, q = 1.f;
+            vec3 le(xc + chord * 0.5f, y0 + lift * q * q, z), te(xc - chord * 0.5f, y0 + lift * q * q + pitch * chord, z), d(0, th, 0);
+            quadN(T.point(le), T.point(te), T.point(te + d), T.point(le + d), xformNormal(T, vec3(0, 0, (float)s)), m);
+        }
+    }
+    void append(const MeshBuilder& o, const mat4& T) {
+        for (auto x : o.v) {
+            vec3 p = T.point({x.p[0], x.p[1], x.p[2]});
+            vec3 n = xformNormal(T, {x.n[0], x.n[1], x.n[2]});
+            x.p[0] = p.x; x.p[1] = p.y; x.p[2] = p.z; x.n[0] = n.x; x.n[1] = n.y; x.n[2] = n.z;
+            v.push_back(x);
+        }
+    }
+};
 
 };
