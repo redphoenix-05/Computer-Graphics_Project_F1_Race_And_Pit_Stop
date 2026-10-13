@@ -151,6 +151,80 @@ struct World {
         }
     }
 
+    void buildBarriers() {
+        int N = T->N;
+        Mat conc = MT(vec3(0.75f, 0.75f, 0.74f), 0.1f, 12.f, 0.f, 0.3f), concTop = MT(vec3(0.85f, 0.85f, 0.84f), 0.1f, 12.f);
+        Mat ads[6] = {MT(vec3(0.85f, 0.1f, 0.1f), 0.2f, 16.f), MT(vec3(0.1f, 0.3f, 0.8f), 0.2f, 16.f), MT(vec3(0.95f, 0.85f, 0.1f), 0.2f, 16.f),
+                      MT(vec3(0.1f, 0.65f, 0.35f), 0.2f, 16.f), MT(vec3(0.95f, 0.95f, 0.95f), 0.2f, 16.f), MT(vec3(0.95f, 0.5f, 0.05f), 0.2f, 16.f)};
+        Mat tire = MT(vec3(0.04f, 0.04f, 0.045f), 0.1f, 12.f), tireW = MT(vec3(0.9f, 0.9f, 0.9f), 0.1f, 12.f), tireR = MT(vec3(0.85f, 0.1f, 0.1f), 0.1f, 12.f);
+        Mat post = MT(vec3(0.25f, 0.27f, 0.3f), 0.5f, 40.f), net = MT(vec3(0.12f, 0.14f, 0.16f), 0.1f, 10.f);
+        for (int side = -1; side <= 1; side += 2) {
+            auto lim = [&](float u) { return side < 0 ? -14.f : T->rightLimitVisual(u); };
+            for (int i = 0; i < N; i++) {
+                float u = T->sRel(i * T->ds);
+                // skip right barrier inside the pit zone (pit wall / garages take over) except at the ramps
+                bool inPitZone = (side > 0 && u > PitC::WALL_X0 && u < PitC::WALL_X1);
+                if (inPitZone) continue;
+                float k = T->k[i];
+                bool outerCorner = std::fabs(k) > 1.f / 190.f && ((k > 0 ? -1 : 1) == side);
+                float d = (side < 0) ? -14.f : T->rightLimitVisual(u);
+                int a = i;
+                vec3 pa = T->p[a] + T->n[a] * d;
+                if (outerCorner) {
+                    // tyre walls: stacks every 1.2 m (every second sample gets one stack)
+                    if (i % 2 == 0) {
+                        vec3 c = pa + T->n[a] * (side * 0.6f);
+                        float rr = rnd(i, side + 3);
+                        MeshBuilder& mb = env.at(c);
+                        for (int lv = 0; lv < 3; lv++) {
+                            const Mat& m = (lv == 1) ? ((i / 8) % 3 == 0 ? tireR : tireW) : tire;
+                            mb.cyl(translate(c.x, 0.17f + lv * 0.34f, c.z), 0.52f, 0.52f, 0.17f, 8, m, lv == 2, false);
+                        }
+                        if (rr > 0.5f) {
+                            vec3 c2 = pa + T->n[a] * (side * 1.65f);
+                            for (int lv = 0; lv < 2; lv++)
+                                mb.cyl(translate(c2.x, 0.17f + lv * 0.34f, c2.z), 0.52f, 0.52f, 0.17f, 8, tire, lv == 1, false);
+                        }
+                    }
+                } else {
+                    wall(env, i, i + 1, lim, 0.5f, 0.0f, 1.0f, [&](int) { return conc; }, &concTop);
+                    // advertising panels on the track-facing side, one per 6 m
+                    if (i % 3 == 0 && std::fabs(k) < 1.f / 300.f) {
+                        int ai = (int)(rnd(i / 3, side + 5) * 6) % 6;
+                        float dd = lim(u) - 0.02f * side * 0 - 0.03f;
+                        vec3 p0 = T->p[a] + T->n[a] * dd, p1 = T->pos(i * T->ds + 5.6f, 0) ; (void)p1;
+                        int b2 = T->wrap(i + 3);
+                        vec3 q1 = T->p[b2] + T->n[b2] * (side < 0 ? -14.03f : T->rightLimitVisual(T->sRel(b2 * T->ds)) - 0.03f);
+                        vec3 q0 = T->p[a] + T->n[a] * (side < 0 ? -14.03f : T->rightLimitVisual(u) - 0.03f);
+                        MeshBuilder& mb = env.at(q0);
+                        vec3 nn = T->n[a] * (float)-1;
+                        auto V = [&](vec3 p, float y) { p.y = y; return p; };
+                        mb.quadN(V(q0, 0.12f), V(q1, 0.12f), V(q1, 0.88f), V(q0, 0.88f), nn, ads[ai]);
+                        vec3 m0 = mix(q0, q1, 0.3f), m1 = mix(q0, q1, 0.7f);
+                        mb.quadN(V(m0, 0.30f), V(m1, 0.30f), V(m1, 0.70f), V(m0, 0.70f), nn, ads[(ai + 4) % 6]);
+                        (void)p0;
+                    }
+                }
+                // catch fence behind the barrier (posts every 6 m)
+                if (i % 3 == 0) {
+                    vec3 c = pa + T->n[a] * (side * 1.4f);
+                    env.at(c).boxAt({c.x, 2.2f, c.z}, {0.06f, 2.2f, 0.06f}, post);
+                }
+            }
+            // translucent fence net
+            auto fd = [&](float u) { return side < 0 ? -15.4f : T->rightLimitVisual(u) + 1.4f; };
+            for (int i = 0; i < N; i += 1) {
+                float u = T->sRel(i * T->ds);
+                if (side > 0 && u > PitC::WALL_X0 - 5.f && u < PitC::WALL_X1 + 5.f) continue;
+                int a = T->wrap(i), b = T->wrap(i + 1);
+                vec3 pa = T->p[a] + T->n[a] * fd(u), pb = T->p[b] + T->n[b] * fd(T->sRel(b * T->ds));
+                auto V = [&](vec3 p, float y) { p.y = y; return p; };
+                glass.at(pa).quadN(V(pa, 0.8f), V(pb, 0.8f), V(pb, 4.3f), V(pa, 4.3f), T->n[a] * (float)-side, net);
+            }
+            (void)lim;
+        }
+    }
 
-    void build(const Track& tr) { T = &tr; buildGround(); buildRoad(); }
+
+    void build(const Track& tr) { T = &tr; buildGround(); buildRoad(); buildBarriers(); }
 };
