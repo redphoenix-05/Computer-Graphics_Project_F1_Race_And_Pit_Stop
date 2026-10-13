@@ -143,6 +143,52 @@ void main() {
 }
 )GLSL";
 
+static const char* SKY_VS = R"GLSL(
+#version 330 core
+uniform mat4 uInvVP;
+out vec3 vDir;
+void main() {
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vec4 ndc = vec4(p * 2.0 - 1.0, 1.0, 1.0);
+    vec4 w = uInvVP * ndc;
+    vDir = w.xyz / w.w;
+    gl_Position = vec4(ndc.xy, 0.9999, 1.0);
+}
+)GLSL";
+static const char* SKY_FS = R"GLSL(
+#version 330 core
+in vec3 vDir;
+uniform vec3 uCamPos, uSunDir, uSunCol, uZenith, uHorizon, uFogCol, uCloud;
+uniform float uStars, uTime;
+out vec4 FragColor;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+}
+float fbm(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * vnoise(p); p *= 2.03; a *= 0.5; } return s; }
+void main() {
+    vec3 d = normalize(vDir - uCamPos);
+    float h = clamp(d.y, 0.0, 1.0);
+    vec3 col = mix(uHorizon, uZenith, pow(h, 0.5));
+    if (d.y < 0.0) col = mix(uHorizon, uFogCol, clamp(-d.y * 8.0, 0.0, 1.0));
+    float sd = max(dot(d, uSunDir), 0.0);
+    col += uSunCol * (pow(sd, 900.0) * 6.0 + pow(sd, 10.0) * 0.28);
+    if (d.y > 0.01) {
+        vec2 q = d.xz / (d.y + 0.12) * 1.3 + vec2(uTime * 0.01, 0.0);
+        float n = fbm(q);
+        float cl = smoothstep(0.52, 0.80, n) * clamp(d.y * 4.0, 0.0, 1.0);
+        col = mix(col, uCloud * (0.75 + 0.5 * uSunCol / (1.0 + uSunCol)) , cl * 0.75);
+        if (uStars > 0.0) {
+            vec2 sp = floor(d.xz / (d.y + 0.3) * 160.0);
+            float s = step(0.9965, hash(sp)) * uStars * (1.0 - cl);
+            col += vec3(s);
+        }
+    }
+    col = pow(col, vec3(1.0 / 2.2) * 1.0);
+    FragColor = vec4(col, 1.0);
+}
+)GLSL";
 // ---------------------------------------------------------------------------
 //  Shader program wrapper
 // ---------------------------------------------------------------------------
