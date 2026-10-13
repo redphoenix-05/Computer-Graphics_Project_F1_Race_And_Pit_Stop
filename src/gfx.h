@@ -78,6 +78,114 @@ vec3 finish(vec3 c, float dist) {
     return pow(c, vec3(1.0 / 2.2));       // gamma
 }
 )GLSL";
+
+static const char* GLSL_ATTRIBS = R"GLSL(
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec3 aCol;
+layout(location=3) in vec4 aMat;   // specular, shininess/128, emission, detail-texture amount
+uniform mat4 uModel;
+uniform mat3 uNrmMat;
+uniform mat4 uVP;
+uniform vec3 uTint;
+uniform float uEmis;
+)GLSL";
+
+static const char* GLSL_DETAIL = R"GLSL(
+uniform sampler2D uNoise;
+float detail(vec3 w, float amt) {
+    if (amt <= 0.0) return 1.0;
+    float n = texture(uNoise, w.xz * 0.31).r * 0.55 + texture(uNoise, w.xz * 0.043).r * 0.45;
+    return 1.0 + (n - 0.5) * 2.0 * amt;
+}
+)GLSL";
+
+// ---- Gouraud: lighting evaluated in the VERTEX shader, colour interpolated
+static const char* GOURAUD_VS_BODY = R"GLSL(
+out vec3 vLit; out vec3 vW; out float vTex; out float vDist;
+void main() {
+    vec4 w = uModel * vec4(aPos, 1.0);
+    vec3 N = normalize(uNrmMat * aNrm);
+    vec3 col = aCol * uTint;
+    vLit = lightModel(w.xyz, N, col, aMat.x, aMat.y * 128.0, aMat.z + uEmis);
+    vW = w.xyz; vTex = aMat.w; vDist = length(uCamPos - w.xyz);
+    gl_Position = uVP * w;
+}
+)GLSL";
+static const char* GOURAUD_FS_BODY = R"GLSL(
+in vec3 vLit; in vec3 vW; in float vTex; in float vDist;
+uniform float uAlpha;
+out vec4 FragColor;
+void main() {
+    vec3 c = vLit * detail(vW, vTex);
+    FragColor = vec4(finish(c, vDist), uAlpha);
+}
+)GLSL";
+
+// ---- Phong: normals interpolated, lighting evaluated per FRAGMENT
+static const char* PHONG_VS_BODY = R"GLSL(
+out vec3 vW; out vec3 vN; out vec3 vC; out vec4 vM;
+void main() {
+    vec4 w = uModel * vec4(aPos, 1.0);
+    vW = w.xyz; vN = uNrmMat * aNrm; vC = aCol * uTint; vM = aMat;
+    gl_Position = uVP * w;
+}
+)GLSL";
+static const char* PHONG_FS_BODY = R"GLSL(
+in vec3 vW; in vec3 vN; in vec3 vC; in vec4 vM;
+uniform float uAlpha; uniform float uEmis;
+out vec4 FragColor;
+void main() {
+    vec3 N = normalize(vN);
+    vec3 col = vC * detail(vW, vM.w);
+    vec3 c = lightModel(vW, N, col, vM.x, vM.y * 128.0, vM.z + uEmis);
+    FragColor = vec4(finish(c, length(uCamPos - vW)), uAlpha);
+}
+)GLSL";
+
+// ---------------------------------------------------------------------------
+//  Shader program wrapper
+// ---------------------------------------------------------------------------
+struct Shader {
+    GLuint id = 0;
+    std::unordered_map<std::string, GLint> cache;
+    static GLuint compile(GLenum type, const std::string& src, const char* name) {
+        GLuint s = glCreateShader(type);
+        const char* c = src.c_str();
+        glShaderSource(s, 1, &c, nullptr);
+        glCompileShader(s);
+        GLint ok = 0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[2048]; glGetShaderInfoLog(s, 2048, nullptr, log);
+            fprintf(stderr, "Shader compile error (%s):\n%s\n", name, log);
+            exit(1);
+        }
+        return s;
+    }
+    void build(const std::string& vs, const std::string& fs, const char* name) {
+        GLuint v = compile(GL_VERTEX_SHADER, vs, name), f = compile(GL_FRAGMENT_SHADER, fs, name);
+        id = glCreateProgram();
+        glAttachShader(id, v); glAttachShader(id, f);
+        glLinkProgram(id);
+        GLint ok = 0; glGetProgramiv(id, GL_LINK_STATUS, &ok);
+        if (!ok) { char log[2048]; glGetProgramInfoLog(id, 2048, nullptr, log); fprintf(stderr, "Link error (%s): %s\n", name, log); exit(1); }
+        glDeleteShader(v); glDeleteShader(f);
+    }
+    GLint u(const char* n) {
+        auto it = cache.find(n);
+        if (it != cache.end()) return it->second;
+        GLint l = glGetUniformLocation(id, n);
+        cache[n] = l; return l;
+    }
+    void use() const { glUseProgram(id); }
+    void f1(const char* n, float a) { glUniform1f(u(n), a); }
+    void i1(const char* n, int a) { glUniform1i(u(n), a); }
+    void f2(const char* n, float a, float b) { glUniform2f(u(n), a, b); }
+    void f3(const char* n, const vec3& v) { glUniform3f(u(n), v.x, v.y, v.z); }
+    void f4(const char* n, float a, float b, float c, float d) { glUniform4f(u(n), a, b, c, d); }
+    void m4(const char* n, const mat4& m) { glUniformMatrix4fv(u(n), 1, GL_FALSE, m.m); }
+};
+
 //  Vertex format and procedural mesh builder
 // ---------------------------------------------------------------------------
 struct Vertex { float p[3], n[3], c[3], m[4]; };   // 13 floats
