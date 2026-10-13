@@ -396,3 +396,69 @@ struct CarAssets {
         }
     }
 };
+
+// ---------------------------------------------------------------------------
+//  Car state, hierarchy and dynamics
+// ---------------------------------------------------------------------------
+enum CarCtrl { CTRL_AUTO = 0, CTRL_MANUAL = 1, CTRL_PIT = 2, CTRL_GRID = 3 };
+
+struct Car {
+    int id = 0; bool player = false; const Livery* liv = nullptr;
+    // kinematic state
+    vec3 pos; float heading = 0, speed = 0, steer = 0, steerIn = 0;
+    float latAcc = 0, longAcc = 0, yawRate = 0, lift = 0;
+    float spin[4] = {0, 0, 0, 0};
+    // race state
+    int idx = -1, lapsDone = 0; float s = 0, d = 0, prevS = 0, lapStart = 0, lastLap = 0, bestLap = 0;
+    bool inLane = false; float hitCooldown = 0, distTotal = 0;
+    float wear = 0;                  // tyre wear 0..1
+    int compound = 1;                // 0 soft 1 medium 2 hard
+    CarCtrl ctrl = CTRL_AUTO;
+    // driver (AI)
+    float lineBase = 0, lineCur = 0, lineTarget = 0, passHold = 0, phase = 0, skill = 1.f;
+    std::vector<float> prof;
+    float thr = 0, brk = 0;
+    // hierarchy
+    Node* root = nullptr; Node* tilt = nullptr; Node* bodyN = nullptr; Node* helmetN = nullptr; Node* steerN = nullptr;
+    Node* hub[4] = {}; Node* wheelN[4] = {};
+
+    static constexpr float WB = 3.6f;   // wheelbase
+
+    float progress() const { return lapsDone * 0 + distTotal; }
+    vec3 forward() const { return vec3(std::cos(heading), 0, std::sin(heading)); }
+    vec3 rightV() const { return vec3(-std::sin(heading), 0, std::cos(heading)); }
+
+    void buildHierarchy(NodePool& pool, const CarAssets& A) {
+        root = pool.make();
+        tilt = pool.make(root);
+        bodyN = pool.make(tilt, &A.body[id]);
+        pool.make(bodyN)->decal = &A.bodyDecal[id];
+        helmetN = pool.make(tilt, &A.helmet[id]);
+        steerN = pool.make(tilt, &A.steerWheel);
+        for (int w = 0; w < 4; w++) {
+            hub[w] = pool.make(tilt);
+            wheelN[w] = pool.make(hub[w], &A.wheel[w < 2 ? 0 : 1][compound]);
+            pool.make(wheelN[w])->decal = &A.wheelDecal[w < 2 ? 0 : 1];
+        }
+    }
+    void setCompound(const CarAssets& A, int c) {
+        compound = c;
+        for (int w = 0; w < 4; w++) wheelN[w]->mesh = &A.wheel[w < 2 ? 0 : 1][c];
+    }
+    // update the transforms of the node hierarchy from the kinematic state
+    void updateNodes() {
+        root->local = translate(pos.x, pos.y + lift, pos.z) * rotY(-heading);
+        float pitch = clampf(longAcc * 0.0011f, -0.06f, 0.05f), roll = clampf(-latAcc * 0.0009f, -0.05f, 0.05f);
+        tilt->local = rotX(roll) * rotZ(pitch);
+        steerN->local = translate(0.78f, 0.72f, 0) * rotZ(0.9f) * rotX(steer * 6.f);
+        for (int w = 0; w < 4; w++) {
+            hub[w]->local = translate(WHEEL_X[w], WHEEL_R[w], WHEEL_Z[w]) * (w < 2 ? rotY(-steer) : mat4());
+            wheelN[w]->local = rotZ(spin[w]) * (WHEEL_Z[w] < 0 ? rotY(PI_F) : mat4());
+        }
+        root->update(mat4());
+    }
+    // world matrix a wheel would have if it were mounted (used by the pit animation)
+    mat4 mountedWheelMatrix(int w) const { return hub[w]->world * (WHEEL_Z[w] < 0 ? rotY(PI_F) : mat4()); }
+
+
+};
